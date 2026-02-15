@@ -27,6 +27,7 @@ All sampling routines are JIT-compiled with JAX and operate on PRNG keys.
 import jax
 import jax.numpy as jnp
 from functools import partial
+import h5py
 
 
 class TrueDataModelUnimodal:
@@ -87,7 +88,7 @@ class TrueDataModelUnimodal:
         Returns:
             Tuple (y, y_prime):
                 - y: Array with shape (N+1, d, 1)
-                - y_prime: Array with shape (N+1, d', 1)
+                - y_prime: Array with shape (N+1, d, 1)
         """
         key, k0 = jax.random.split(key)
         val0 = self._step_dist(k0, jnp.zeros((self.d, 2)))
@@ -175,7 +176,7 @@ class TrueDataModelBimodal:
         Returns:
             Tuple (y, y_prime):
                 - y: Array with shape (N+1, d, 1)
-                - y_prime: Array with shape (N+1, d', 1)
+                - y_prime: Array with shape (N+1, d, 1)
         """
         key, k_sel, k0 = jax.random.split(key, 3)
         selector = jax.random.bernoulli(k_sel, p=0.5, shape=(self.d, 2))
@@ -190,3 +191,63 @@ class TrueDataModelBimodal:
         _, vals = jax.lax.scan(step, (val0, selector), keys)
         traj = jnp.concatenate([val0[None, ...], vals], axis=0)
         return traj[..., 0:1], traj[..., 1:2]
+
+
+class TrueDataModel:
+    """True data model using fluid flows or other real data examples."""
+
+    def __init__(self, run_sett: dict, mode: str):
+        """Initialize the model hyperparameters.
+
+        Args:
+            run_sett: Dictionary with required fields:
+        """
+        self.run_sett = run_sett
+        self.run_sett_data_KS = run_sett["data_KS"]
+        self.d = self.run_sett["global"][
+            "d"
+        ]  # wrong notation, but copied from other datamodels
+        self.downsampling_factor = (
+            self.run_sett_data_KS["d"] // self.run_sett_data_KS["d_prime"]
+        )
+        self.N = int(self.run_sett["global"]["N"])
+        self.mode = mode
+        self.u_hflr_samples, self.u_lflr_samples = self.KS_true_trajectory()
+
+    def sample_true_trajectory(self, key):
+        if self.mode == "KS":
+            num = self.u_hflr_samples.shape[0]
+            block_len = int(self.N + 1)
+            start = jax.random.randint(key, shape=(), minval=0, maxval=num - block_len)
+            y = jax.lax.dynamic_slice(
+                self.u_hflr_samples, (start, 0, 0), (block_len, self.d, 1)
+            )
+            y_prime = jax.lax.dynamic_slice(
+                self.u_lflr_samples, (start, 0, 0), (block_len, self.d, 1)
+            )
+
+            return y, y_prime
+        else:
+            raise ValueError(f"Invalid data mode: {self.mode}")
+
+    def KS_true_trajectory(self):
+        """Load raw KS arrays and create a downsampled HF view.
+
+        Args:
+            file_name: Path to an HDF5 file with datasets 'LFLR', 'HFHR', 't', 'x'.
+
+        Returns:
+          - u_hflr_samples: High-fidelity, high-resolution array (512*320,24,1).
+          - u_lflr_samples: Low-fidelity, low-resolution array (512*320,24,1).
+        """
+        with h5py.File(self.run_sett_data_KS["data_file_name"], "r+") as f1:
+            u_LFLR = f1["LFLR"][()]
+            u_HFHR = f1["HFHR"][()]
+
+        u_HFLR = u_HFHR[:, :, :: self.downsampling_factor]
+        u_LFLR = u_LFLR[:, :, ::2]
+
+        u_hflr_samples = u_HFLR.reshape(-1, int(self.d), 1)
+        u_lflr_samples = u_LFLR.reshape(-1, int(self.d), 1)
+
+        return u_hflr_samples, u_lflr_samples

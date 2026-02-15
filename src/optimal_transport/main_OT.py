@@ -4,12 +4,13 @@ import sys
 import os
 import jax
 import jax.numpy as jnp
+import h5py
 from clu import metric_writers
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 from wandb_integration.wandb_adapter import WandbWriter
 from src.optimal_transport.alg1_OT import PolicyGradient, NormalizingFlowModel
-from src.optimal_transport.dgp_OT import TrueDataModelUnimodal
+from src.optimal_transport.dgp_OT import TrueDataModelUnimodal, TrueDataModel
 from src.optimal_transport.utils_OT import (
     calculate_adjacent_corr,
     plot_adjacent_corrs,
@@ -85,13 +86,23 @@ else:
 
 
 def main():
-    true_data_model = TrueDataModelUnimodal(run_sett)
-    normalizing_flow_model = NormalizingFlowModel(run_sett, true_data_model)
-    policy_gradient = PolicyGradient(
-        run_sett,
-        true_data_model=true_data_model,
-        normalizing_flow_model=normalizing_flow_model,
-    )
+    use_synthetic_data = bool(run_sett["global"]["use_synthetic_data"])
+    if use_synthetic_data:
+        true_data_model = TrueDataModelUnimodal(run_sett)
+        normalizing_flow_model = NormalizingFlowModel(run_sett, true_data_model)
+        policy_gradient = PolicyGradient(
+            run_sett,
+            true_data_model=true_data_model,
+            normalizing_flow_model=normalizing_flow_model,
+        )
+    else:
+        true_data_model = TrueDataModel(run_sett, mode="KS")
+        normalizing_flow_model = NormalizingFlowModel(run_sett, true_data_model)
+        policy_gradient = PolicyGradient(
+            run_sett,
+            true_data_model=true_data_model,
+            normalizing_flow_model=normalizing_flow_model,
+        )
 
     alpha = float(run_sett["policy_gradient"]["mix_pathwise_alpha"])
     use_cv = bool(run_sett["policy_gradient"]["use_control_variates"])
@@ -124,6 +135,10 @@ def main():
         print(f"✓ Data normalization: ON (mode={run_sett['preprocessing']['mode']})")
     else:
         print("Data normalization: OFF")
+    if use_synthetic_data:
+        print("✓ Using synthetic data.")
+    else:
+        print(f"✓ Using real data (mode={true_data_model.mode}).")
 
     N = int(run_sett["global"]["N"])
     d = int(run_sett["global"]["d"])
@@ -137,47 +152,140 @@ def main():
     log_hist_every = int(run_sett["metrics"]["log_hist_every"])
     log_train_every = int(run_sett["metrics"]["log_train_every"])
     log_hist_n = int(run_sett["metrics"]["log_hist_n"])
+    train_transform_mode = str(run_sett["global"]["train_tranform_mode"])
 
     last_metrics_key = None
 
-    for it in range(num_iterations):
-        key_step = jax.random.fold_in(key_master, RNG_NAMESPACE + it)
-        metrics_key = jax.random.fold_in(key_master, RNG_NAMESPACE + it + 222_222)
-        true_metrics_key, flow_metrics_key = jax.random.split(metrics_key)
+    if train_transform_mode == "train":
+        for it in range(num_iterations):
+            key_step = jax.random.fold_in(key_master, RNG_NAMESPACE + it)
+            metrics_key = jax.random.fold_in(key_master, RNG_NAMESPACE + it + 222_222)
+            true_metrics_key, flow_metrics_key = jax.random.split(metrics_key)
 
-        train_metrics = policy_gradient.update_params(key_step)
-        global_step = int(policy_gradient._step)
+            train_metrics = policy_gradient.update_params(key_step)
+            global_step = int(policy_gradient._step)
 
-        if use_wandb:
-            scalars = {"metrics/beta_value": float(policy_gradient._last_beta_value)}
-            if (global_step % log_train_every) == 0:
-                scalars.update(
-                    {f"train/{k}": float(v) for k, v in train_metrics.items()}
+            if use_wandb:
+                scalars = {
+                    "metrics/beta_value": float(policy_gradient._last_beta_value)
+                }
+                if (global_step % log_train_every) == 0:
+                    scalars.update(
+                        {f"train/{k}": float(v) for k, v in train_metrics.items()}
+                    )
+                writer.write_scalars(step=global_step, scalars=scalars)
+
+            if global_step < kl_warmup:
+                continue  # skip heavy logging during beta=0 warmup
+
+            if use_wandb and (global_step % log_every == 0):
+                diag = policy_gradient.compute_logging_losses(metrics_key)
+                writer.write_scalars(
+                    step=global_step,
+                    scalars={
+                        "metrics/J_val_log": float(diag["J_val"]),
+                        "metrics/J_KL_proxy": float(diag["NLL_true"]),
+                        "metrics/J_beta": float(diag["J_beta"]),
+                        "metrics/beta_now": float(diag["beta_now"]),
+                    },
                 )
-            writer.write_scalars(step=global_step, scalars=scalars)
 
-        if global_step < kl_warmup:
-            continue  # skip heavy logging during beta=0 warmup
+            if use_wandb and (global_step % log_corr_every == 0) and use_synthetic_data:
+                try:
+                    corr_flow, corr_flow_prime = calculate_adjacent_corr(
+                        policy_gradient, "flow", true_metrics_key
+                    )
+                    corr_true, corr_true_prime = calculate_adjacent_corr(
+                        true_data_model, "true", flow_metrics_key
+                    )
 
-        if use_wandb and (global_step % log_every == 0):
-            diag = policy_gradient.compute_logging_losses(metrics_key)
-            writer.write_scalars(
-                step=global_step,
-                scalars={
-                    "metrics/J_val_log": float(diag["J_val"]),
-                    "metrics/J_KL_proxy": float(diag["NLL_true"]),
-                    "metrics/J_beta": float(diag["J_beta"]),
-                    "metrics/beta_now": float(diag["beta_now"]),
-                },
-            )
+                    corr_error = float(
+                        jnp.mean(jnp.abs(jnp.array(corr_flow) - jnp.array(corr_true)))
+                    )
+                    corr_error_prime = float(
+                        jnp.mean(
+                            jnp.abs(
+                                jnp.array(corr_flow_prime) - jnp.array(corr_true_prime)
+                            )
+                        )
+                    )
 
-        if use_wandb and (global_step % log_corr_every == 0):
+                    writer.write_scalars(
+                        step=global_step,
+                        scalars={
+                            "metrics/adjcorr_error": corr_error,
+                            "metrics/adjcorr_error_prime": corr_error_prime,
+                        },
+                    )
+
+                    try:
+                        plot_adjacent_corrs(
+                            corr_flow,
+                            corr_flow_prime,
+                            corr_true,
+                            corr_true_prime,
+                            run_sett,
+                            writer,
+                            first_k=first_k,
+                            step=global_step,
+                            key_suffix=key_suffix,
+                        )
+                    except Exception as e:
+                        print(f"Warning: plot_adjacent_corrs failed: {e}")
+
+                except Exception as e:
+                    print(f"Warning: adjacent corr logging failed: {e}")
+
+            if (
+                use_wandb
+                and log_hist_every > 0
+                and (global_step % log_hist_every == 0)
+                and use_synthetic_data
+            ):
+                try:
+                    max_n = min(N + 1, log_hist_n)
+                    for n in range(max_n):
+                        plot_comparison(
+                            n=n,
+                            dims=d,
+                            policy_gradient=policy_gradient,
+                            true_data_model=true_data_model,
+                            run_sett=run_sett,
+                            writer=writer,
+                            step=global_step,
+                            key_suffix=key_suffix,
+                        )
+                except Exception as e:
+                    print(f"Warning: periodic histogram logging failed: {e}")
+
+        if use_wandb and use_synthetic_data:
+            final_step = int(policy_gradient._step)
+            if last_metrics_key is None:
+                last_metrics_key = jax.random.fold_in(
+                    key_master, RNG_NAMESPACE + 333_333
+                )
+                true_last_metrics_key, flow_last_metrics_key = jax.random.split(
+                    last_metrics_key
+                )
+
+            for n in range(N + 1):
+                plot_comparison(
+                    n=n,
+                    dims=d,
+                    policy_gradient=policy_gradient,
+                    true_data_model=true_data_model,
+                    run_sett=run_sett,
+                    writer=writer,
+                    step=final_step,
+                    key_suffix=key_suffix,
+                )
+
             try:
                 corr_flow, corr_flow_prime = calculate_adjacent_corr(
-                    policy_gradient, "flow", true_metrics_key
+                    policy_gradient, "flow", flow_last_metrics_key
                 )
                 corr_true, corr_true_prime = calculate_adjacent_corr(
-                    true_data_model, "true", flow_metrics_key
+                    true_data_model, "true", true_last_metrics_key
                 )
 
                 corr_error = float(
@@ -190,115 +298,76 @@ def main():
                 )
 
                 writer.write_scalars(
-                    step=global_step,
+                    step=final_step,
                     scalars={
                         "metrics/adjcorr_error": corr_error,
                         "metrics/adjcorr_error_prime": corr_error_prime,
                     },
                 )
 
-                try:
-                    plot_adjacent_corrs(
-                        corr_flow,
-                        corr_flow_prime,
-                        corr_true,
-                        corr_true_prime,
-                        run_sett,
-                        writer,
-                        first_k=first_k,
-                        step=global_step,
-                        key_suffix=key_suffix,
-                    )
-                except Exception as e:
-                    print(f"Warning: plot_adjacent_corrs failed: {e}")
-
-            except Exception as e:
-                print(f"Warning: adjacent corr logging failed: {e}")
-
-        if use_wandb and log_hist_every > 0 and (global_step % log_hist_every == 0):
-            try:
-                max_n = min(N + 1, log_hist_n)
-                for n in range(max_n):
-                    plot_comparison(
-                        n=n,
-                        dims=d,
-                        policy_gradient=policy_gradient,
-                        true_data_model=true_data_model,
-                        run_sett=run_sett,
-                        writer=writer,
-                        step=global_step,
-                        key_suffix=key_suffix,
-                    )
-            except Exception as e:
-                print(f"Warning: periodic histogram logging failed: {e}")
-
-    if use_wandb:
-        final_step = int(policy_gradient._step)
-        if last_metrics_key is None:
-            last_metrics_key = jax.random.fold_in(key_master, RNG_NAMESPACE + 333_333)
-            true_last_metrics_key, flow_last_metrics_key = jax.random.split(
-                last_metrics_key
-            )
-
-        for n in range(N + 1):
-            plot_comparison(
-                n=n,
-                dims=d,
-                policy_gradient=policy_gradient,
-                true_data_model=true_data_model,
-                run_sett=run_sett,
-                writer=writer,
-                step=final_step,
-                key_suffix=key_suffix,
-            )
-
-        try:
-            corr_flow, corr_flow_prime = calculate_adjacent_corr(
-                policy_gradient, "flow", flow_last_metrics_key
-            )
-            corr_true, corr_true_prime = calculate_adjacent_corr(
-                true_data_model, "true", true_last_metrics_key
-            )
-
-            corr_error = float(
-                jnp.mean(jnp.abs(jnp.array(corr_flow) - jnp.array(corr_true)))
-            )
-            corr_error_prime = float(
-                jnp.mean(
-                    jnp.abs(jnp.array(corr_flow_prime) - jnp.array(corr_true_prime))
+                plot_adjacent_corrs(
+                    corr_flow,
+                    corr_flow_prime,
+                    corr_true,
+                    corr_true_prime,
+                    run_sett,
+                    writer,
+                    first_k=first_k,
+                    step=final_step,
+                    key_suffix=key_suffix,
                 )
-            )
+            except Exception as e:
+                print(f"Warning: final adjacent corr logging failed: {e}")
 
-            writer.write_scalars(
-                step=final_step,
-                scalars={
-                    "metrics/adjcorr_error": corr_error,
-                    "metrics/adjcorr_error_prime": corr_error_prime,
-                },
-            )
+            try:
+                writer.flush()
+            except Exception:
+                pass
+            try:
+                writer.close()
+            except Exception:
+                pass
 
-            plot_adjacent_corrs(
-                corr_flow,
-                corr_flow_prime,
-                corr_true,
-                corr_true_prime,
-                run_sett,
-                writer,
-                first_k=first_k,
-                step=final_step,
-                key_suffix=key_suffix,
-            )
+        try:
+            ckpt_dir = os.path.join(work_dir, "checkpoints_policy_gradient")
+            policy_gradient.save_params(ckpt_dir)
         except Exception as e:
-            print(f"Warning: final adjacent corr logging failed: {e}")
+            print(f"Warning: saving PolicyGradient state failed: {e}")
 
+    if train_transform_mode == "transform":
+        _, u_lflr_samples = true_data_model.KS_true_trajectory()
+        settings_gen = os.path.join(project_root, "src/generation/settings_GEN.yaml")
+        with open(settings_gen, "r") as f:
+            run_sett_gen = yaml.safe_load(f)
+        num_conditionings = int(run_sett_gen["pde_solver"]["num_conditionings"])
+        d = u_lflr_samples.shape[1]
+        block_len = int(N + 1)
+        num_blocks = int(num_conditionings / block_len)
+        y_trajs = u_lflr_samples[:num_conditionings].reshape(
+            num_blocks, block_len, d, 1
+        )
         try:
-            writer.flush()
-        except Exception:
-            pass
+            ckpt_dir = os.path.join(work_dir, "checkpoints_policy_gradient")
+            ok = policy_gradient.load_params(ckpt_dir)
+            if not ok:
+                print(
+                    "Warning: No PolicyGradient checkpoint found to load for transform mode."
+                )
+        except Exception as e:
+            print(f"Warning: loading PolicyGradient state failed: {e}")
         try:
-            writer.close()
-        except Exception:
-            pass
+            yp_trajs = jax.vmap(
+                normalizing_flow_model.transport_y_to_yp, in_axes=(0, None)
+            )(y_trajs, policy_gradient.params)
+            yp_trajs = yp_trajs.reshape(-1, d, 1)
+            out_path = os.path.join(work_dir, "yp_trajs.h5")
+            with h5py.File(out_path, "w") as f:
+                f.create_dataset(
+                    "yp_trajs", data=jax.device_get(yp_trajs), compression="gzip"
+                )
+            print(f"Saved yp_trajs to {out_path}")
+        except Exception as e:
+            print(f"Warning: final transport failed: {e}")
 
 
 if __name__ == "__main__":

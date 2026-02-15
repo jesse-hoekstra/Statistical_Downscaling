@@ -35,6 +35,8 @@ import distrax
 import optax
 from typing import Tuple
 from functools import partial
+import os
+import orbax.checkpoint as ocp
 
 from preprocessing_OT import DataNormalizer
 
@@ -258,6 +260,7 @@ class NormalizingFlowModel:
         self._hk_logprob_total_norm = hk.without_apply_rng(
             hk.transform(self._logprob_total_batch_norm_impl)
         )
+        self._hk_transport = hk.without_apply_rng(hk.transform(self._transport_impl))
         init_key = jax.random.PRNGKey(self.seed)
         dummy_keys = jax.random.split(init_key, 2)  # 2 needed?
         self.params = self._hk_sample_norm.init(init_key, keys=dummy_keys)
@@ -398,6 +401,59 @@ class NormalizingFlowModel:
     ):
         """Compute total log-probabilities for a batch of normalized trajectories."""
         return self._hk_logprob_total_norm.apply(params, y_z=y_z, yp_z=yp_z)
+
+    def _transport_impl(self, y_z_in: jnp.ndarray):
+        """Transport a batch of normalized trajectories to yp space.
+        Steps (performed in normalized space):
+            1) Compute base variables u_t by inverting y_flow given context from prev y.
+            2) Compute v_t = rho_t * u_t (conditional mean under Gaussian copula).
+            3) Map v_t forward through yp_flow to obtain yp_t.
+        """
+        y_flow, yp_flow, rho_net = self._make_modules()
+        d, N_len = self.d, self.N_len
+
+        def step(carry, n):
+            prev_y_c, prev_yp_c = carry
+            y_n = jnp.squeeze(y_z_in[n], axis=-1)
+            rho = rho_net(prev_y_c, prev_yp_c, n)
+
+            ctx_y = self._ctx(prev_y_c, n)
+            _, u = y_flow.log_prob_and_base(y_n, ctx_y)
+
+            v = rho * u
+            ctx_yp = self._ctx(prev_yp_c, n)
+            yp_n = yp_flow.forward_from_base(v, ctx_yp)
+
+            return (y_n, yp_n), yp_n
+
+        prev0 = jnp.zeros((d,), dtype=jnp.float32)
+        ns = jnp.arange(N_len, dtype=jnp.int32)
+        (_, _), yp_seq = hk.scan(step, (prev0, prev0), ns)
+        yp_seq = yp_seq.reshape((N_len, d, 1))
+        return yp_seq
+
+    def transport_y_to_yp(self, y_traj: jnp.ndarray, params: hk.Params):
+        """Transport a single ORIGINAL-space trajectory y -> yp via learned flow.
+
+        Args:
+            y_traj: Array with shape (N+1, d, 1) in ORIGINAL space.
+            params: Haiku params pytree for the model (matching init).
+
+        Returns:
+            yp: Array with shape (N+1, d, 1) in ORIGINAL space.
+        """
+        assert y_traj.shape == (
+            self.N_len,
+            self.d,
+            1,
+        ), f"Expected y_traj shape {(self.N_len, self.d, 1)}, got {y_traj.shape}"
+        zeros_like = jnp.zeros_like(y_traj)
+        y_traj_norm, _ = self.normalizer.transform("normalize", y_traj, zeros_like)
+
+        yp_traj_norm = self._hk_transport.apply(params, y_traj_norm)
+        _, yp_traj = self.normalizer.transform("denormalize", y_traj_norm, yp_traj_norm)
+
+        return yp_traj
 
 
 class PolicyGradient:
@@ -744,3 +800,69 @@ class PolicyGradient:
         y_z, yp_z, _ = self.model.sample_batch_norm(params, keys)
         y, yp = self.model.normalizer.transform("denormalize", y_z, yp_z)
         return y, yp
+
+    def save_params(self, ckpt_dir: str):
+        """Save params, ema_params, and opt_state."""
+        abs_dir = os.path.abspath(ckpt_dir)
+        options = ocp.CheckpointManagerOptions(create=True, max_to_keep=2)
+        item_handlers = {
+            "params": ocp.PyTreeCheckpointHandler(),
+            "ema_params": ocp.PyTreeCheckpointHandler(),
+            "opt_state": ocp.PyTreeCheckpointHandler(),
+        }
+        manager = ocp.CheckpointManager(
+            abs_dir, item_handlers=item_handlers, options=options
+        )
+        payload = {
+            "params": self.params,
+            "ema_params": self.ema_params,
+            "opt_state": self.opt_state,
+        }
+        current_step = int(self._step)
+        manager.save(step=current_step, items=payload)
+        try:
+            manager.wait_until_finished()
+        except Exception:
+            pass
+        print(
+            f"[PolicyGradient] State saved to: {os.path.join(abs_dir, str(current_step))}"
+        )
+
+    def load_params(self, ckpt_dir: str) -> bool:
+        """Load latest params, ema_params."""
+        try:
+            abs_dir = os.path.abspath(ckpt_dir)
+            if not os.path.isdir(abs_dir):
+                print(f"[PolicyGradient] Checkpoint dir does not exist: {abs_dir}")
+                return False
+            item_handlers = {
+                "params": ocp.PyTreeCheckpointHandler(),
+                "ema_params": ocp.PyTreeCheckpointHandler(),
+                "opt_state": ocp.PyTreeCheckpointHandler(),
+            }
+            manager = ocp.CheckpointManager(
+                abs_dir,
+                item_handlers=item_handlers,
+                options=ocp.CheckpointManagerOptions(create=False, max_to_keep=2),
+            )
+            latest_step = manager.latest_step()
+            if latest_step is None:
+                print(f"[PolicyGradient] No checkpoints found in: {abs_dir}")
+                return False
+            target_item = {
+                "params": self.params,
+                "ema_params": self.ema_params,
+                "opt_state": self.opt_state,
+            }
+            restored = manager.restore(latest_step, items=target_item)
+            self.params = restored["params"]
+            self.ema_params = restored["ema_params"]
+            self.opt_state = restored["opt_state"]
+            self._step = int(latest_step)
+            print(
+                f"[PolicyGradient] State loaded from step {latest_step} at: {abs_dir}"
+            )
+            return True
+        except Exception as e:
+            print(f"[PolicyGradient] Failed to load state from '{ckpt_dir}': {e}")
+            return False
