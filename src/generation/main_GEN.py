@@ -293,7 +293,19 @@ def main():
         num_gen_samples = int(run_sett_pde_solver["num_gen_samples"])
         hyperparameter_tuning = bool(run_sett_global["hyperparameter_tuning"])
 
-        y = u_lflr_samples[:num_conditionings]
+        if run_sett_global["debiased_conditioning"]:
+            settings_ot = os.path.join(
+                project_root, "src/optimal_transport/settings_OT.yaml"
+            )
+            with open(settings_ot, "r") as f:
+                run_sett_ot = yaml.safe_load(f)
+            seed = int(run_sett_ot["global"]["seed"])
+            run_name = f"run_seed{seed}"
+            saved_dir = os.path.join(project_root, "main_OT", run_name)
+            with h5py.File(saved_dir + "/yp_trajs.h5", "r") as f1:
+                y = f1["yp_trajs"][()]
+        else:
+            y = u_lflr_samples[:num_conditionings]
         denoise_fn = restore_denoise_fn(
             f"{work_dir}/checkpoints_denoise_model", denoiser_model
         )

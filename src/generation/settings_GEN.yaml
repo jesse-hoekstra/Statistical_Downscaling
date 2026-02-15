@@ -2,7 +2,7 @@ global:
   seed: 888
   RNG_NAMESPACE: 20260115
   generation_type: 'wan_conditional'
-  mode: 'eval'
+  mode: 'sample'
   train_denoiser: False
   train_pde: True
   continue_training: False
@@ -14,6 +14,7 @@ global:
   time_emb_dim: 16
   chunk_size_sampler: 16
   hyperparameter_tuning: False
+  debiased_conditioning: True
 train_denoiser:
   batch_size: 512 
   total_train_steps: 1_000_000 
