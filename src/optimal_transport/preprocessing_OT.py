@@ -99,24 +99,20 @@ class DataNormalizer:
             if mode == "global":
                 y_flat = y.reshape((cur * N_len, self.d, 1))
                 yp_flat = yp.reshape((cur * N_len, self.d, 1))
-                sum_y = sum_y + jnp.sum(y_flat, axis=0, keepdims=True).repeat(
+                sum_y += jnp.sum(y_flat, axis=0, keepdims=True).repeat(N_len, axis=0)
+                sumsq_y += jnp.sum(y_flat * y_flat, axis=0, keepdims=True).repeat(
                     N_len, axis=0
                 )
-                sumsq_y = sumsq_y + jnp.sum(
-                    y_flat * y_flat, axis=0, keepdims=True
-                ).repeat(N_len, axis=0)
-                sum_yp = sum_yp + jnp.sum(yp_flat, axis=0, keepdims=True).repeat(
+                sum_yp += jnp.sum(yp_flat, axis=0, keepdims=True).repeat(N_len, axis=0)
+                sumsq_yp += jnp.sum(yp_flat * yp_flat, axis=0, keepdims=True).repeat(
                     N_len, axis=0
                 )
-                sumsq_yp = sumsq_yp + jnp.sum(
-                    yp_flat * yp_flat, axis=0, keepdims=True
-                ).repeat(N_len, axis=0)
                 total += cur * N_len
             elif mode == "time_varying":
-                sum_y = sum_y + jnp.sum(y, axis=0)
-                sumsq_y = sumsq_y + jnp.sum(y * y, axis=0)
-                sum_yp = sum_yp + jnp.sum(yp, axis=0)
-                sumsq_yp = sumsq_yp + jnp.sum(yp * yp, axis=0)
+                sum_y += jnp.sum(y, axis=0)
+                sumsq_y += jnp.sum(y * y, axis=0)
+                sum_yp += jnp.sum(yp, axis=0)
+                sumsq_yp += jnp.sum(yp * yp, axis=0)
                 total += cur
 
             remaining -= cur
@@ -130,7 +126,9 @@ class DataNormalizer:
         )
         self.std_y = jnp.sqrt(self.var_y)
         self.std_yp = jnp.sqrt(self.var_yp)
-        self.log_det = jnp.sum(jnp.log(self.std_y)) + jnp.sum(jnp.log(self.std_yp))
+        self.log_det_y = jnp.sum(jnp.log(self.std_y))
+        self.log_det_yp = jnp.sum(jnp.log(self.std_yp))
+        self.log_det = self.log_det_y + self.log_det_yp
 
         return self
 
