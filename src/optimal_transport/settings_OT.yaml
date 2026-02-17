@@ -1,13 +1,13 @@
 global:
   seed: 0
   N: 7  
-  d: 24
+  d_prime: 24
   B: 128
+  num_iterations: 100000 
   time_emb_dim: 16
-  num_iterations: 30000
   RNG_NAMESPACE: 2026000000
-  use_synthetic_data: False
   train_tranform_mode: "train"
+  true_data_model: "ks" 
 data_KS:
   d: 192
   d_prime: 24
@@ -15,58 +15,96 @@ data_KS:
 marginal_flow:
   num_bins: 8
   num_layers: 4
-  hidden_size: 128
-  # need to calculate these specifically data-based!!
+  hidden_size: 96
   range_min: -4.0
   range_max: 4.0
 correlation_flow:
   rho_max: 0.95
-  rho_hidden: 64
-  hidden_size: 128
+  rho_hidden: 32
+  hidden_size: 96
 beta_schedule:
   type: "constant"
   warmup_end_ratio: 0.2
   init_boundary_value: 0.0
-  end_boundary_value: 2.0
-  kl_only_warmup_steps: 0
+  end_boundary_value: 5.0
+  kl_only_warmup_steps: 25000
 lr_schedule:
   type: "constant"
-  constant_lr: 1e-3
+  constant_lr: 1e-4
   init_value: 0.0
   peak_value: 0.0003
   warmup_steps: 10000
   decay_steps: 40000
   end_value: 0.000001
+  step_decay_boundaries: [10000, 20000, 30000]
+  step_decay_factor: 0.5
 ema: 
-  ema_decay: 0.999
+  ema_decay: 0.995
   use_ema_eval: True
 preprocessing:
   use_data_normalization: True
   winsor_clip_z: 10.0
-  num_samples: 4096
-  chunk_size: 512
   mode: "time_varying"
   eps: 1e-6
   RNG_NAMESPACE_NORM: 20260113
 baseline_fitting:
   cv_ridge: 1e-3
-  cv_split_ratio: 0.0
+  cv_split_ratio: 0.5
+  use_control_variates: True 
+  use_advantage_standardization: True 
 policy_gradient:
   mix_pathwise_alpha: 0.0
-  cv_split_ratio: 0.5
-  use_control_variates: True
-  use_advantage_standardization: True
   RNG_NAMESPACE_PG: 2026
+  grad_clip_norm: 1.0
+logging:
+  log_train_every: 200 
+  log_eval_every: 1000 
 metrics:
-  chunk_size: 256
-  num_samples: 2048
-  log_scalar_every: 200
-  log_adjcorr_every: 3000
-  adjcorr_first_k: 3
-  log_hist_every: 3000
-  log_hist_n: 4
-  log_train_every: 50
-  plot_samples_max: 2048
-  adjcorr_max_samples: 2048
+  transition_kl_metrics:
+    run_transition_kl: True
+    transition_kl_mode: "oracle"
+    transition_kl_csv_name: transition_kl_steps.csv
+    transition_kl_plot_name: transition_kl_steps
+  evaluation:
+    eval_B: 2048
+    metrics_chunk_size: 256
+    eval_fold_in_tag: 999001
+    save_eval_samples: false
+    eval_samples_dir: eval_samples
+  distance_metrics:
+    dist_csv_name: dist_metrics.csv
+    dist_metrics_samples: 1024
+  adj_corr_metrics:
+    adjcorr_first_k: 10
+    adjcorr_plot_name: adjcorr_comparison
+    log_hist_n: 0
+    hist_num_bins: 50
+  perm_test_metrics:
+    run_adjcorr_perm_test: false
+    adjcorr_test_samples: 2048
+    adjcorr_perm_B: 1024
+    adjcorr_test_csv_name: adjcorr_tests.csv
+  eval_traj_metrics:
+    run_traj_dist_metrics: false
+    traj_metrics_samples: 2048
+    traj_dist_csv_name: "traj_dist_metrics.csv"
+  mmd:
+    mmd_sigma: null
+    mmd_rff_features: 256
+    mmd_median_pairs: 4096
+    mmd_seed_offset: 3407
+  swd:
+    swd_num_proj: 256
+    swd_seed_offset: 3407
+  opt_gap_metrics:
+    opt_gap_csv_name: "opt_gap.csv"
+robust_hedging:
+  dt: 1.0
+  S0_y: 1.0
+  S0_yp: 2.0
+  sigma_y: 1.0
+  sigma_yp: 0.5
+  q_true: null
+  rho_true: 0.0
 wandb:
   use_wandb: True
