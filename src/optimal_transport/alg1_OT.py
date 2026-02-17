@@ -37,6 +37,7 @@ from typing import Tuple
 from functools import partial
 import os
 import orbax.checkpoint as ocp
+from typing import Optional
 
 from preprocessing_OT import DataNormalizer
 
@@ -119,7 +120,7 @@ class ConditionalSplineCouplingFlow(hk.Module):
         super().__init__(name=name)
         self.run_sett_marginal_flow = run_sett["marginal_flow"]
         self.run_sett_global = run_sett["global"]
-        self.d = int(self.run_sett_global["d"])
+        self.d = int(self.run_sett_global["d_prime"])
         self.context_dim = int(context_dim)
         self.num_layers = int(self.run_sett_marginal_flow["num_layers"])
         self.hidden_size = int(self.run_sett_marginal_flow["hidden_size"])
@@ -197,7 +198,7 @@ class RhoNet(hk.Module):
         super().__init__(name=name)
         self.run_sett_global = run_sett["global"]
         self.run_sett_correlation_flow = run_sett["correlation_flow"]
-        self.d = int(self.run_sett_global["d"])
+        self.d = int(self.run_sett_global["d_prime"])
         self.time_emb_dim = int(self.run_sett_global["time_emb_dim"])
         self.hidden_size = int(self.run_sett_correlation_flow["hidden_size"])
         self.rho_max = float(self.run_sett_correlation_flow["rho_max"])
@@ -233,7 +234,7 @@ class NormalizingFlowModel:
         self.run_sett_correlation_flow = run_sett["correlation_flow"]
         self.run_sett_preprocessing = run_sett["preprocessing"]
 
-        self.d = int(self.run_sett_global["d"])
+        self.d = int(self.run_sett_global["d_prime"])
         self.N = int(self.run_sett_global["N"])
         self.N_len = int(self.N + 1)
         self.seed = int(self.run_sett_global["seed"])
@@ -251,6 +252,18 @@ class NormalizingFlowModel:
             self.run_sett_preprocessing["use_data_normalization"]
         )
 
+        self._hk_logprob_steps_y_norm = hk.without_apply_rng(
+            hk.transform(self._logprob_steps_y_batch_norm_impl)
+        )
+        self._hk_logprob_total_y_norm = hk.without_apply_rng(
+            hk.transform(self._logprob_total_y_batch_norm_impl)
+        )
+        self._hk_logprob_steps_yp_norm = hk.without_apply_rng(
+            hk.transform(self._logprob_steps_yp_batch_norm_impl)
+        )
+        self._hk_logprob_total_yp_norm = hk.without_apply_rng(
+            hk.transform(self._logprob_total_yp_batch_norm_impl)
+        )
         self._hk_sample_norm = hk.without_apply_rng(
             hk.transform(self._sample_batch_norm_impl)
         )
@@ -262,7 +275,7 @@ class NormalizingFlowModel:
         )
         self._hk_transport = hk.without_apply_rng(hk.transform(self._transport_impl))
         init_key = jax.random.PRNGKey(self.seed)
-        dummy_keys = jax.random.split(init_key, 2)  # 2 needed?
+        dummy_keys = jax.random.split(init_key, 2)
         self.params = self._hk_sample_norm.init(init_key, keys=dummy_keys)
 
     def _ctx(self, prev: jnp.ndarray, n: jnp.ndarray) -> jnp.ndarray:
@@ -360,6 +373,58 @@ class NormalizingFlowModel:
         (_, _), logp_steps = hk.scan(step, (prev0, prev0), ns)
         return logp_steps
 
+    def _logprob_steps_y_one_traj_norm(self, y_flow, y_traj):
+        d, N_len = self.d, self.N_len
+        y_vec = jnp.squeeze(y_traj, -1)
+
+        def step(prev_y, t):
+            y_t = y_vec[t]
+            ctx_y = self._ctx(prev_y, t)
+            logpy, _ = y_flow.log_prob_and_base(y_t, ctx_y)
+            return y_t, logpy
+
+        prev0 = jnp.zeros((d,))
+        ts = jnp.arange(N_len)
+        _, logp_steps = hk.scan(step, prev0, ts)
+        return logp_steps
+
+    def _logprob_steps_yp_one_traj_norm(self, yp_flow, yp_traj):
+        d, N_len = self.d, self.N_len
+        yp_vec = jnp.squeeze(yp_traj, -1)
+
+        def step(prev_yp, t):
+            yp_t = yp_vec[t]
+            ctx_yp = self._ctx(prev_yp, t)
+            logpyp, _ = yp_flow.log_prob_and_base(yp_t, ctx_yp)
+            return yp_t, logpyp
+
+        prev0 = jnp.zeros((d,))
+        ts = jnp.arange(N_len)
+        _, logp_steps = hk.scan(step, prev0, ts)
+        return logp_steps
+
+    def _logprob_steps_y_batch_norm_impl(self, y_z):
+        y_flow, _, _ = self._make_modules()
+
+        def one(y_one):
+            return self._logprob_steps_y_one_traj_norm(y_flow, y_one)
+
+        return hk.vmap(one, split_rng=False)(y_z)
+
+    def _logprob_steps_yp_batch_norm_impl(self, yp_z):
+        _, yp_flow, _ = self._make_modules()
+
+        def one(yp_one):
+            return self._logprob_steps_yp_one_traj_norm(yp_flow, yp_one)
+
+        return hk.vmap(one, split_rng=False)(yp_z)
+
+    def _logprob_total_y_batch_norm_impl(self, y_z):
+        return jnp.sum(self._logprob_steps_y_batch_norm_impl(y_z), axis=1)
+
+    def _logprob_total_yp_batch_norm_impl(self, yp_z):
+        return jnp.sum(self._logprob_steps_yp_batch_norm_impl(yp_z), axis=1)
+
     def _sample_batch_norm_impl(self, keys: jax.Array):
         """Haiku-transformed: vmap of `_sample_one_traj_norm` over `keys`."""
         y_flow, yp_flow, rho_net = self._make_modules()
@@ -390,6 +455,18 @@ class NormalizingFlowModel:
         """Sample a batch of normalized trajectories `(y_z, yp_z, mean_abs_rho)`."""
         return self._hk_sample_norm.apply(params, keys=keys)
 
+    def logprob_steps_y_batch_norm(self, params, y_z):
+        return self._hk_logprob_steps_y_norm.apply(params, y_z=y_z)
+
+    def logprob_steps_yp_batch_norm(self, params, yp_z):
+        return self._hk_logprob_steps_yp_norm.apply(params, yp_z=yp_z)
+
+    def logprob_total_y_batch_norm(self, params, y_z):
+        return self._hk_logprob_total_y_norm.apply(params, y_z=y_z)
+
+    def logprob_total_yp_batch_norm(self, params, yp_z):
+        return self._hk_logprob_total_yp_norm.apply(params, yp_z=yp_z)
+
     def logprob_steps_batch_norm(
         self, params: hk.Params, y_z: jnp.ndarray, yp_z: jnp.ndarray
     ):
@@ -401,6 +478,45 @@ class NormalizingFlowModel:
     ):
         """Compute total log-probabilities for a batch of normalized trajectories."""
         return self._hk_logprob_total_norm.apply(params, y_z=y_z, yp_z=yp_z)
+
+    def _log_det_y_per_t(self):
+        if (not self.use_data_normalization) or (self.normalizer is None):
+            return jnp.zeros((self.N_len,))
+        return jnp.sum(jnp.log(self.normalizer.std_y), axis=(1, 2))
+
+    def _log_det_yp_per_t(self):
+        if (not self.use_data_normalization) or (self.normalizer is None):
+            return jnp.zeros((self.N_len,))
+        return jnp.sum(jnp.log(self.normalizer.std_yp), axis=(1, 2))
+
+    def logprob_steps_y_batch_original(self, params, y):
+        if not self.use_data_normalization:
+            y_z = y
+        else:
+            y_z, _ = self.normalizer.transform("normalize", y, jnp.zeros_like(y))
+        logq_z = self.logprob_steps_y_batch_norm(params, y_z)
+        if not self.use_data_normalization:
+            return logq_z
+        ld = self._log_det_y_per_t()
+        return logq_z - ld[None, :]
+
+    def logprob_steps_yp_batch_original(self, params, yp):
+        if not self.use_data_normalization:
+            yp_z = yp
+        else:
+            _, yp_z = self.normalizer.transform("normalize", yp, jnp.zeros_like(yp))
+        logq_z = self.logprob_steps_yp_batch_norm(params, yp_z)
+        if not self.use_data_normalization:
+            return logq_z
+        ld = self._log_det_yp_per_t()
+        return logq_z - ld[None, :]
+
+    def sample_trajectory(self, key, params: hk.Params):
+        if hasattr(key, "keys") and (not isinstance(params, dict)):
+            key, params = params, key
+        y_z, yp_z, _ = self.sample_batch_norm(params, jax.random.split(key, 1))
+        y, yp = self.normalizer.transform("denormalize", y_z[0], yp_z[0])
+        return y, yp
 
     def _transport_impl(self, y_z_in: jnp.ndarray):
         """Transport a batch of normalized trajectories to yp space.
@@ -467,17 +583,18 @@ class PolicyGradient:
     Maintains an EMA of parameters for evaluation if configured.
     """
 
-    def __init__(self, run_sett: dict, true_data_model, normalizing_flow_model):
+    def __init__(self, run_sett: dict, true_data_model, normalizing_flow_model=None):
         self.run_sett = run_sett
         self.run_sett_global = run_sett["global"]
         self.run_sett_beta = run_sett["beta_schedule"]
         self.run_sett_lr = run_sett["lr_schedule"]
         self.run_sett_policy_gradient = run_sett["policy_gradient"]
         self.run_sett_metrics = run_sett["metrics"]
+        self.run_sett_evaluation = run_sett["metrics"]["evaluation"]
         self.run_sett_baseline_fitting = run_sett["baseline_fitting"]
         self.run_sett_ema = run_sett["ema"]
 
-        self.d = int(self.run_sett_global["d"])
+        self.d = int(self.run_sett_global["d_prime"])
         self.N = int(self.run_sett_global["N"])
         self.N_len = int(self.N + 1)
         self.B = int(self.run_sett_global["B"])
@@ -490,7 +607,9 @@ class PolicyGradient:
         )
 
         self.true_data_model = true_data_model
-        self.model = normalizing_flow_model
+        self.model = normalizing_flow_model or NormalizingFlowModel(
+            run_sett, true_data_model
+        )
 
         self.ema_decay = float(self.run_sett_ema["ema_decay"])
         self.use_ema_eval = bool(self.run_sett_ema["use_ema_eval"])
@@ -509,10 +628,10 @@ class PolicyGradient:
             self.run_sett_policy_gradient["mix_pathwise_alpha"]
         )
         self.use_control_variates = bool(
-            self.run_sett_policy_gradient["use_control_variates"]
+            self.run_sett_baseline_fitting["use_control_variates"]
         )
         self.use_advantage_standardization = bool(
-            self.run_sett_policy_gradient["use_advantage_standardization"]
+            self.run_sett_baseline_fitting["use_advantage_standardization"]
         )
 
         self._step = 0
@@ -552,24 +671,39 @@ class PolicyGradient:
         decay_steps = int(self.run_sett_lr["decay_steps"])
         end_value = float(self.run_sett_lr["end_value"])
         constant_lr = float(self.run_sett_lr["constant_lr"])
+        step_decay_boundaries = self.run_sett_lr["step_decay_boundaries"]
+        step_decay_factor = float(self.run_sett_lr["step_decay_factor"])
         mode_type = str(self.run_sett_lr["type"]).lower()
+        warmup = warmup = optax.linear_schedule(
+            init_value=init_value,
+            end_value=peak_value,
+            transition_steps=max(warmup_steps, 1),
+        )
         if mode_type == "constant":
             return optax.constant_schedule(constant_lr)
         elif mode_type == "cosine":
-            warmup = optax.linear_schedule(
-                init_value=init_value,
-                end_value=peak_value,
-                transition_steps=max(warmup_steps, 1),
-            )
             tail = optax.cosine_decay_schedule(
                 init_value=peak_value,
                 decay_steps=max(decay_steps, 1),
                 alpha=end_value / max(peak_value, 1e-12),
             )
-
-            return optax.join_schedules(
-                schedules=[warmup, tail], boundaries=[max(warmup_steps, 1)]
-            )
+        elif mode_type == "step":
+            boundaries_abs = [int(b) for b in step_decay_boundaries]
+            warm = max(warmup_steps, 1)
+            boundaries = [max(0, b - warm) for b in boundaries_abs]
+            boundaries_and_scales = {}
+            current_scale = 1.0
+            for b in boundaries:
+                current_scale *= step_decay_factor
+                boundaries_and_scales[b] = current_scale
+                tail = optax.piecewise_constant_schedule(
+                    init_value=peak_value, boundaries_and_scales=boundaries_and_scales
+                )
+        else:
+            tail = optax.constant_schedule(peak_value)
+        return optax.join_schedules(
+            schedules=[warmup, tail], boundaries=[max(warmup_steps, 1)]
+        )
 
     def get_eval_params_trees(self):
         """Return EMA params if enabled, else current params."""
@@ -607,9 +741,7 @@ class PolicyGradient:
         return jnp.einsum("bnp,np->bn", phi, w)
 
     @partial(jax.jit, static_argnums=0)
-    def _train_step(
-        self, params, ema_params, opt_state, key: jax.Array, step_i: jnp.ndarray
-    ):
+    def _train_step(self, params, opt_state, key: jax.Array, step_i: jnp.ndarray):
         """One training step: compute loss, update params and EMA, return metrics."""
         beta = jnp.asarray(self.beta_schedule(step_i), dtype=jnp.float32)
         warm = jnp.asarray(self.kl_warmup_steps, dtype=jnp.int32)
@@ -637,7 +769,7 @@ class PolicyGradient:
             y_ng, yp_ng = self.model.normalizer.transform(
                 "denormalize", y_z_ng, yp_z_ng
             )
-            sq = 0.5 * jnp.sum((y_ng - yp_ng) ** 2, axis=(2, 3))
+            sq = jnp.sum((y_ng - yp_ng) ** 2, axis=(2, 3))
             V = jnp.flip(jnp.cumsum(jnp.flip(sq, axis=1), axis=1), axis=1)
 
             if self.use_control_variates:
@@ -681,51 +813,60 @@ class PolicyGradient:
 
             # ---- pathwise true cost ----
             y_s, yp_s = self.model.normalizer.transform("denormalize", y_z_s, yp_z_s)
-            V0_pw = 0.5 * jnp.sum((y_s - yp_s) ** 2, axis=(1, 2, 3))
+            V0_pw = jnp.sum((y_s - yp_s) ** 2, axis=(1, 2, 3))
             cost_mean_pathwise = jnp.mean(V0_pw)
 
             loss_cost = (1.0 - alpha) * loss_cost_sf + alpha * cost_mean_pathwise
 
+            logp_y_z = self.model.logprob_total_y_batch_norm(p, y_true_z)
+            logp_yp_z = self.model.logprob_total_yp_batch_norm(p, yp_true_z)
             logp_total_z = self.model.logprob_total_batch_norm(p, y_true_z, yp_true_z)
             if self.model.use_data_normalization:
                 assert self.model.normalizer is not None
-                logp_total = logp_total_z - self.model.normalizer.log_det
+                logp_y = logp_y_z - self.model.normalizer.log_det_y
+                logp_yp = logp_yp_z - self.model.normalizer.log_det_yp
+                # logp_total = logp_total_z - self.model.normalizer.log_det
             else:
-                logp_total = logp_total_z
-            nll_true = -jnp.mean(logp_total)
+                logp_y = logp_y_z
+                logp_yp = logp_yp_z
+                # logp_total = logp_total_z
+            # nll_true = -jnp.mean(logp_total)
+            nll_marg = -(jnp.mean(logp_y) + jnp.mean(logp_yp))
 
-            loss = loss_cost + beta * nll_true
+            loss = loss_cost + beta * nll_marg
 
             aux = {
                 "loss": loss,
-                "loss_cost_sf": loss_cost_sf,
-                "cost_mean_pathwise": cost_mean_pathwise,
-                "alpha_mix": alpha,
-                "nll_true": nll_true,
-                "beta": beta,
+                "loss_cost_advantage": loss_cost_sf,
+                "loss_cost_pathwise": cost_mean_pathwise,
+                "nll_marg": nll_marg,
                 "mean_abs_rho_model": jnp.mean(rho_abs),
             }
             return loss, aux
 
         (loss_val, aux), grads = jax.value_and_grad(loss_and_aux, has_aux=True)(params)
-
+        clip_norm = float(self.run_sett_policy_gradient["grad_clip_norm"])
+        if clip_norm and clip_norm > 0.0:
+            g_norm = optax.global_norm(grads)
+            scale = jnp.minimum(1.0, clip_norm / (g_norm + 1e-6))
+            grads = jax.tree_util.tree_map(lambda g: g * scale, grads)
         updates, opt_state = self.optimizer.update(grads, opt_state, params)
         params = optax.apply_updates(params, updates)
 
-        ema_params = jax.tree_util.tree_map(
-            lambda e, p: self.ema_decay * e + (1.0 - self.ema_decay) * p,
-            ema_params,
-            params,
-        )
-
-        return params, ema_params, opt_state, aux, beta
+        return params, opt_state, aux, beta
 
     def update_params(self, key: jax.Array):
         """Advance training by one step and return scalar metrics."""
         step_i = jnp.asarray(self._step, dtype=jnp.int32)
-        self.params, self.ema_params, self.opt_state, metrics, beta = self._train_step(
-            self.params, self.ema_params, self.opt_state, key, step_i
+        self.params, self.opt_state, metrics, beta = self._train_step(
+            self.params, self.opt_state, key, step_i
         )
+        if self.use_ema_eval:
+            self.ema_params = jax.tree_util.tree_map(
+                lambda e, p: self.ema_decay * e + (1.0 - self.ema_decay) * p,
+                self.ema_params,
+                self.params,
+            )
         self._last_beta_value = float(beta)
         self._step += 1
         return {k: float(v) for k, v in metrics.items()}
@@ -733,8 +874,8 @@ class PolicyGradient:
     def compute_logging_losses(self, key: jax.Array):
         """Compute logging metrics J_val, NLL_true, and combined J_beta."""
         rng_namespace = int(self.run_sett_policy_gradient["RNG_NAMESPACE_PG"])
-        B = int(self.run_sett_metrics["num_samples"])
-        chunk = int(self.run_sett_metrics["chunk_size"])
+        B = int(self.run_sett_evaluation["eval_B"])
+        chunk = int(self.run_sett_evaluation["metrics_chunk_size"])
         params = self.get_eval_params_trees()
 
         remaining = B
@@ -748,7 +889,7 @@ class PolicyGradient:
             y_z, yp_z, _ = self.model.sample_batch_norm(params, keys)
             y, yp = self.model.normalizer.transform("denormalize", y_z, yp_z)
             diff = y - yp
-            V0 = 0.5 * jnp.sum(diff * diff, axis=(1, 2, 3))
+            V0 = jnp.sum(diff * diff, axis=(1, 2, 3))
             cost_sum += float(jnp.sum(V0))
             tot += cur
             remaining -= cur
@@ -764,42 +905,63 @@ class PolicyGradient:
             keys = jax.random.split(use_key, cur)
             y_t, yp_t = jax.vmap(self.true_data_model.sample_true_trajectory)(keys)
             y_z, yp_z = self.model.normalizer.transform("normalize", y_t, yp_t)
-            logp_z = self.model.logprob_total_batch_norm(params, y_z, yp_z)
+            logp_y_z = self.model.logprob_total_y_batch_norm(params, y_z)
+            logp_yp_z = self.model.logprob_total_yp_batch_norm(params, yp_z)
             if self.model.use_data_normalization:
                 assert self.model.normalizer is not None
-                logp = logp_z - self.model.normalizer.log_det
+                logp_y = logp_y_z - self.model.normalizer.log_det_y
+                logp_yp = logp_yp_z - self.model.normalizer.log_det_yp
             else:
-                logp = logp_z
-            nll_sum += float(jnp.sum(-logp))
+                logp_y = logp_y_z
+                logp_yp = logp_yp_z
+            nll_sum += float(jnp.sum(-(logp_y + logp_yp)))
             tot += cur
             remaining -= cur
-        NLL_true = nll_sum / max(tot, 1)
 
-        beta_now = float(self._last_beta_value)
-        J_beta = J_val + beta_now * NLL_true
+        NLL_marg = nll_sum / max(tot, 1)
+        beta = float(self._last_beta_value)
+        J_beta = J_val + beta * NLL_marg
         return {
             "J_val": float(J_val),
-            "NLL_true": float(NLL_true),
+            "NLL_marg": float(NLL_marg),
             "J_beta": float(J_beta),
-            "beta_now": float(beta_now),
+            "beta": float(beta),
         }
+
+    def sample_trajectory(self, key: jax.Array, params: Optional[hk.Params] = None):
+        if params is None:
+            params = self.get_eval_params_trees()
+        y_z, yp_z, _ = self.model.sample_batch_norm(params, jax.random.split(key, 1))
+        y, yp = self.model.normalizer.transform("denormalize", y_z[0], yp_z[0])
+        return y, yp
 
     def sample_trajectories(
         self,
         key: jax.Array,
         num: int,
-        params: hk.Params,
+        params: Optional[hk.Params] = None,
     ):
         """
         Returns trajectories in ORIGINAL space:
           y:  (num, N+1, d, 1)
           yp: (num, N+1, d, 1)
         """
+        if params is None:
+            params = self.get_eval_params_trees()
         num = int(num)
         keys = jax.random.split(key, num)
         y_z, yp_z, _ = self.model.sample_batch_norm(params, keys)
         y, yp = self.model.normalizer.transform("denormalize", y_z, yp_z)
         return y, yp
+
+    def joint_log_prob_batch(self, y, yp, params: Optional[hk.Params] = None):
+        if params is None:
+            params = self.get_eval_params_trees()
+        y_z, yp_z = self.model.normalizer.transform("normalize", y, yp)
+        logp_z = self.model.logprob_total_batch_norm(params, y_z, yp_z)
+        if self.model.use_data_normalization:
+            return logp_z - self.model.normalizer.log_det
+        return logp_z
 
     def save_params(self, ckpt_dir: str):
         """Save params, ema_params, and opt_state."""
