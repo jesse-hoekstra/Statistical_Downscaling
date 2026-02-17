@@ -38,16 +38,17 @@ class DataNormalizer:
             true_data_model: Object providing `sample_true_trajectory(key)`.
         """
         self.preprocessing_sett = run_sett["preprocessing"]
+        self.evaluation_sett = run_sett["metrics"]["evaluation"]
         self.global_sett = run_sett["global"]
         self.seed = int(self.global_sett["seed"])
         self.N = int(self.global_sett["N"])
-        self.d = int(self.global_sett["d"])
+        self.d = int(self.global_sett["d_prime"])
         self.use_data_normalization = bool(
             self.preprocessing_sett["use_data_normalization"]
         )
         self.winsor_clip_z = float(self.preprocessing_sett["winsor_clip_z"])
-        self.num_samples = int(self.preprocessing_sett["num_samples"])
-        self.chunk_size = int(self.preprocessing_sett["chunk_size"])
+        self.num_samples = int(self.evaluation_sett["eval_B"])
+        self.chunk_size = int(self.evaluation_sett["metrics_chunk_size"])
         self.mode = str(self.preprocessing_sett["mode"])
         self.eps = float(self.preprocessing_sett["eps"])
         self.RNG_NAMESPACE_NORM = int(self.preprocessing_sett["RNG_NAMESPACE_NORM"])
