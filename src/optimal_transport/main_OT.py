@@ -239,9 +239,11 @@ def main():
         except Exception as e:
             print(f"Warning: loading PolicyGradient state failed: {e}")
         try:
+            key_transform = jax.random.fold_in(key_master, RNG_NAMESPACE + 333_333)
+            transport_keys = jax.random.split(key_transform, num_blocks)
             yp_trajs = jax.vmap(
-                policy_gradient.model.transport_y_to_yp, in_axes=(0, None)
-            )(y_trajs, policy_gradient.params)
+                policy_gradient.model.transport_y_to_yp, in_axes=(0, None, 0)
+            )(y_trajs, policy_gradient.params, transport_keys)
             yp_trajs = yp_trajs.reshape(-1, d_prime, 1)
             out_path = os.path.join(work_dir, "yp_trajs.h5")
             with h5py.File(out_path, "w") as f:
