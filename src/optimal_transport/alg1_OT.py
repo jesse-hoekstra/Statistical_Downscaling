@@ -244,7 +244,6 @@ class NormalizingFlowModel:
         self.hidden_size = int(self.run_sett_marginal_flow["hidden_size"])
         self.num_bins = int(self.run_sett_marginal_flow["num_bins"])
 
-        self.rho_hidden = int(self.run_sett_correlation_flow["rho_hidden"])
         self.rho_max = float(self.run_sett_correlation_flow["rho_max"])
 
         self.normalizer = DataNormalizer(run_sett, true_data_model).fit()
