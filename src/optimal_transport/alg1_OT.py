@@ -518,42 +518,47 @@ class NormalizingFlowModel:
         y, yp = self.normalizer.transform("denormalize", y_z[0], yp_z[0])
         return y, yp
 
-    def _transport_impl(self, y_z_in: jnp.ndarray):
+    def _transport_impl(self, y_z_in: jnp.ndarray, key: jax.Array):
         """Transport a batch of normalized trajectories to yp space.
         Steps (performed in normalized space):
             1) Compute base variables u_t by inverting y_flow given context from prev y.
-            2) Compute v_t = rho_t * u_t (conditional mean under Gaussian copula).
+            2) Sample v_t ~ N(rho_t * u_t, (1 - rho_t^2) * I) from the Gaussian copula.
             3) Map v_t forward through yp_flow to obtain yp_t.
         """
         y_flow, yp_flow, rho_net = self._make_modules()
         d, N_len = self.d, self.N_len
 
         def step(carry, n):
-            prev_y_c, prev_yp_c = carry
+            prev_y_c, prev_yp_c, key_in = carry
+            key_in, k_eps = jax.random.split(key_in)
             y_n = jnp.squeeze(y_z_in[n], axis=-1)
             rho = rho_net(prev_y_c, prev_yp_c, n)
 
             ctx_y = self._ctx(prev_y_c, n)
             _, u = y_flow.log_prob_and_base(y_n, ctx_y)
 
-            v = rho * u
+            eps = jax.random.normal(k_eps, (d,))
+            s = jnp.sqrt(jnp.clip(1.0 - rho * rho, 1e-6, 1.0))
+            v = rho * u + s * eps
+
             ctx_yp = self._ctx(prev_yp_c, n)
             yp_n = yp_flow.forward_from_base(v, ctx_yp)
 
-            return (y_n, yp_n), yp_n
+            return (y_n, yp_n, key_in), yp_n
 
         prev0 = jnp.zeros((d,), dtype=jnp.float32)
         ns = jnp.arange(N_len, dtype=jnp.int32)
-        (_, _), yp_seq = hk.scan(step, (prev0, prev0), ns)
+        (_, _, _), yp_seq = hk.scan(step, (prev0, prev0, key), ns)
         yp_seq = yp_seq.reshape((N_len, d, 1))
         return yp_seq
 
-    def transport_y_to_yp(self, y_traj: jnp.ndarray, params: hk.Params):
+    def transport_y_to_yp(self, y_traj: jnp.ndarray, params: hk.Params, key: jax.Array):
         """Transport a single ORIGINAL-space trajectory y -> yp via learned flow.
 
         Args:
             y_traj: Array with shape (N+1, d, 1) in ORIGINAL space.
             params: Haiku params pytree for the model (matching init).
+            key: JAX PRNG key for sampling the copula noise.
 
         Returns:
             yp: Array with shape (N+1, d, 1) in ORIGINAL space.
@@ -566,7 +571,7 @@ class NormalizingFlowModel:
         zeros_like = jnp.zeros_like(y_traj)
         y_traj_norm, _ = self.normalizer.transform("normalize", y_traj, zeros_like)
 
-        yp_traj_norm = self._hk_transport.apply(params, y_traj_norm)
+        yp_traj_norm = self._hk_transport.apply(params, y_traj_norm, key)
         _, yp_traj = self.normalizer.transform("denormalize", y_traj_norm, yp_traj_norm)
 
         return yp_traj
@@ -820,17 +825,13 @@ class PolicyGradient:
 
             logp_y_z = self.model.logprob_total_y_batch_norm(p, y_true_z)
             logp_yp_z = self.model.logprob_total_yp_batch_norm(p, yp_true_z)
-            logp_total_z = self.model.logprob_total_batch_norm(p, y_true_z, yp_true_z)
             if self.model.use_data_normalization:
                 assert self.model.normalizer is not None
                 logp_y = logp_y_z - self.model.normalizer.log_det_y
                 logp_yp = logp_yp_z - self.model.normalizer.log_det_yp
-                # logp_total = logp_total_z - self.model.normalizer.log_det
             else:
                 logp_y = logp_y_z
                 logp_yp = logp_yp_z
-                # logp_total = logp_total_z
-            # nll_true = -jnp.mean(logp_total)
             nll_marg = -(jnp.mean(logp_y) + jnp.mean(logp_yp))
 
             loss = loss_cost + beta * nll_marg
