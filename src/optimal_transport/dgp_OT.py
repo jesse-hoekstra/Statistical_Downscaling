@@ -506,10 +506,10 @@ class KSTrueDataModel:
         num = self.u_hflr_samples.shape[0]
         block_len = int(self.N + 1)
         start = jax.random.randint(key, shape=(), minval=0, maxval=num - block_len)
-        y = jax.lax.dynamic_slice(
+        y_prime = jax.lax.dynamic_slice(
             self.u_hflr_samples, (start, 0, 0), (block_len, self.d_prime, 1)
         )
-        y_prime = jax.lax.dynamic_slice(
+        y = jax.lax.dynamic_slice(
             self.u_lflr_samples, (start, 0, 0), (block_len, self.d_prime, 1)
         )
 
