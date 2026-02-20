@@ -704,9 +704,9 @@ class PolicyGradient:
             for b in boundaries:
                 current_scale *= step_decay_factor
                 boundaries_and_scales[b] = current_scale
-                tail = optax.piecewise_constant_schedule(
-                    init_value=peak_value, boundaries_and_scales=boundaries_and_scales
-                )
+            tail = optax.piecewise_constant_schedule(
+                init_value=peak_value, boundaries_and_scales=boundaries_and_scales
+            )
         else:
             tail = optax.constant_schedule(peak_value)
         return optax.join_schedules(
