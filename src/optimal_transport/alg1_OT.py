@@ -96,6 +96,8 @@ class ConditionerMLP(hk.Module):
         h = jax.nn.gelu(h)
         h = hk.Linear(self.hidden_size)(h)
         h = jax.nn.gelu(h)
+        h = hk.Linear(self.hidden_size)(h)
+        h = jax.nn.gelu(h)
         h = hk.Linear(
             self.out_dim,
             w_init=hk.initializers.Constant(0.0),
@@ -210,6 +212,8 @@ class RhoNet(hk.Module):
         te = sinusoidal_time_embedding(n, self.time_emb_dim).reshape((-1,))
         inp = jnp.concatenate([prev_y, prev_yp, te], axis=0)
         h = hk.Linear(self.hidden_size)(inp)
+        h = jax.nn.gelu(h)
+        h = hk.Linear(self.hidden_size)(h)
         h = jax.nn.gelu(h)
         h = hk.Linear(self.hidden_size)(h)
         h = jax.nn.gelu(h)
@@ -503,7 +507,7 @@ class NormalizingFlowModel:
         if not self.use_data_normalization:
             yp_z = yp
         else:
-            _, yp_z = self.normalizer.transform("normalize", yp, jnp.zeros_like(yp))
+            _, yp_z = self.normalizer.transform("normalize", jnp.zeros_like(yp), yp)
         logq_z = self.logprob_steps_yp_batch_norm(params, yp_z)
         if not self.use_data_normalization:
             return logq_z
@@ -653,7 +657,7 @@ class PolicyGradient:
             ramp_steps = max(1, int(num_iter * warmup_ratio))
             return optax.linear_schedule(init_beta, end_beta, ramp_steps)
         if mode_type == "schedule":
-            num_iter = int(self.run_sett_beta)
+            num_iter = int(self.run_sett_global["num_iterations"])
             start_ramp = int(num_iter * 0.2)
             end_ramp = int(num_iter * 0.8)
             ramp = max(1, end_ramp - start_ramp)
