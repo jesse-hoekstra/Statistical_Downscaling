@@ -67,7 +67,7 @@ def calculate_constraint_rmse(
     vec_c = jax.vmap(_single_calculate_constraint_rmse, in_axes=(1, 0), out_axes=0)(
         predicted_samples_red_dim, condition_reference_samples
     )
-    return jnp.mean(vec_c)
+    return jnp.mean(vec_c), jnp.std(vec_c)
 
 
 def _single_calculate_sample_variability(generated_samples: jnp.ndarray) -> float:
@@ -99,7 +99,7 @@ def calculate_sample_variability(generated_samples: jnp.ndarray) -> float:
     vec_c = jax.vmap(_single_calculate_sample_variability, in_axes=(1,), out_axes=0)(
         generated_samples
     )
-    return jnp.mean(vec_c)
+    return jnp.mean(vec_c), jnp.std(vec_c)
 
 
 def _single_dimension_calculate_kld(
@@ -166,7 +166,7 @@ def _single_calculate_kld(
     )(predicted_samples, reference_samples, epsilon)
     total_kld = jnp.sum(kld_vec)
 
-    return total_kld
+    return total_kld, jnp.std(kld_vec)
 
 
 @jax.jit
@@ -283,10 +283,10 @@ def calculate_melr_pooled(
 
     def weighted_calc():
         weights = E_ref / jnp.sum(E_ref)
-        return jnp.sum(weights * log_ratios)
+        return jnp.sum(weights * log_ratios), jnp.std(weights * log_ratios)
 
     def unweighted_calc():
-        return jnp.mean(log_ratios)
+        return jnp.mean(log_ratios), jnp.std(log_ratios)
 
     return jax.lax.cond(weighted, weighted_calc, unweighted_calc)
 
@@ -350,7 +350,7 @@ def _single_calculate_wass1(
     # Average the Wass1 metric across all dimensions
     mean_wass1 = jnp.mean(wass1_vec)
 
-    return mean_wass1
+    return mean_wass1, jnp.std(wass1_vec)
 
 
 @partial(jax.jit, static_argnames="num_bins")

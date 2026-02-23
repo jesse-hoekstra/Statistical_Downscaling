@@ -413,16 +413,32 @@ def main():
         )
         samples = _load_samples_h5(sample_file, as_jax=True)
 
-        constraint_rmse = calculate_constraint_rmse(
+        if run_sett_global["debiased_conditioning"]:
+            settings_ot = os.path.join(
+                project_root, "src/optimal_transport/settings_OT.yaml"
+            )
+            with open(settings_ot, "r") as f:
+                run_sett_ot = yaml.safe_load(f)
+            seed = int(run_sett_ot["global"]["seed"])
+            run_name = f"run_seed{seed}"
+            saved_dir = os.path.join(project_root, "main_OT", run_name)
+            with h5py.File(saved_dir + "/yp_trajs.h5", "r") as f1:
+                y = f1["yp_trajs"][()]
+        else:
+            y = u_lflr_samples[:num_conditionings]
+
+        constraint_rmse, constraint_rmse_sd = calculate_constraint_rmse(
             samples,
-            u_lflr_samples[0 : int(num_conditionings)],
+            y,
             C_prime,
         )
-        kld = calculate_kld_pooled(
+        kld, kld_sd = calculate_kld_pooled(
             samples, u_hfhr_samples, epsilon=float(run_sett_metrics["epsilon"])
         )
-        sample_variability = calculate_sample_variability(samples)
-        melr_weighted = calculate_melr_pooled(
+        sample_variability, sample_variability_sd = calculate_sample_variability(
+            samples
+        )
+        melr_weighted, melr_weighted_sd = calculate_melr_pooled(
             samples,
             u_hfhr_samples,
             sample_shape=(run_sett_global["d"],),
@@ -430,7 +446,7 @@ def main():
             epsilon=float(run_sett_metrics["epsilon"]),
         )
 
-        melr_unweighted = calculate_melr_pooled(
+        melr_unweighted, melr_unweighted_sd = calculate_melr_pooled(
             samples,
             u_hfhr_samples,
             sample_shape=(run_sett_global["d"],),
@@ -438,7 +454,7 @@ def main():
             epsilon=float(run_sett_metrics["epsilon"]),
         )
 
-        wass1 = calculate_wass1_pooled(
+        wass1, wass1_sd = calculate_wass1_pooled(
             samples,
             u_hfhr_samples,
             num_bins=1000,
@@ -447,24 +463,50 @@ def main():
         print(
             "constraint_rmse: ",
             constraint_rmse,
+            "(sd:",
+            constraint_rmse_sd,
+            ")",
             "sample_variability: ",
             sample_variability,
+            "(sd:",
+            sample_variability_sd,
+            ")",
             "melr_unweighted: ",
             melr_unweighted,
+            "(sd:",
+            melr_unweighted_sd,
+            ")",
             "melr_weighted: ",
             melr_weighted,
+            "(sd:",
+            melr_weighted_sd,
+            ")",
             "kld: ",
             kld,
+            "(sd:",
+            kld_sd,
+            ")",
             "wass1: ",
             wass1,
+            "(sd:",
+            wass1_sd,
+            ")",
         )
         if use_wandb:
             writer.write_scalar("metrics/constraint_rmse", float(constraint_rmse))
+            writer.write_scalar("metrics/constraint_rmse_sd", float(constraint_rmse_sd))
             writer.write_scalar("metrics/kld", float(kld))
+            writer.write_scalar("metrics/kld_sd", float(kld_sd))
             writer.write_scalar("metrics/sample_variability", float(sample_variability))
+            writer.write_scalar(
+                "metrics/sample_variability_sd", float(sample_variability_sd)
+            )
             writer.write_scalar("metrics/melr_weighted", float(melr_weighted))
+            writer.write_scalar("metrics/melr_weighted_sd", float(melr_weighted_sd))
             writer.write_scalar("metrics/melr_unweighted", float(melr_unweighted))
+            writer.write_scalar("metrics/melr_unweighted_sd", float(melr_unweighted_sd))
             writer.write_scalar("metrics/wass1", float(wass1))
+            writer.write_scalar("metrics/wass1_sd", float(wass1_sd))
 
     # Flush/close the writer once
     try:
