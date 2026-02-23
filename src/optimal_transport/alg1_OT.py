@@ -96,8 +96,6 @@ class ConditionerMLP(hk.Module):
         h = jax.nn.gelu(h)
         h = hk.Linear(self.hidden_size)(h)
         h = jax.nn.gelu(h)
-        h = hk.Linear(self.hidden_size)(h)
-        h = jax.nn.gelu(h)
         h = hk.Linear(
             self.out_dim,
             w_init=hk.initializers.Constant(0.0),
@@ -212,8 +210,6 @@ class RhoNet(hk.Module):
         te = sinusoidal_time_embedding(n, self.time_emb_dim).reshape((-1,))
         inp = jnp.concatenate([prev_y, prev_yp, te], axis=0)
         h = hk.Linear(self.hidden_size)(inp)
-        h = jax.nn.gelu(h)
-        h = hk.Linear(self.hidden_size)(h)
         h = jax.nn.gelu(h)
         h = hk.Linear(self.hidden_size)(h)
         h = jax.nn.gelu(h)
@@ -970,7 +966,7 @@ class PolicyGradient:
     def save_params(self, ckpt_dir: str):
         """Save params, ema_params, and opt_state."""
         abs_dir = os.path.abspath(ckpt_dir)
-        options = ocp.CheckpointManagerOptions(create=True, max_to_keep=2)
+        options = ocp.CheckpointManagerOptions(create=True, max_to_keep=10)
         item_handlers = {
             "params": ocp.PyTreeCheckpointHandler(),
             "ema_params": ocp.PyTreeCheckpointHandler(),
