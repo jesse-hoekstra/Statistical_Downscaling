@@ -1,4 +1,5 @@
 import os
+import socket
 import sys
 import jax
 import jax.numpy as jnp
@@ -52,6 +53,8 @@ env_disable = os.environ.get("WANDB_DISABLED", "").strip().lower() in {
 use_wandb = use_wandb_cfg and (not env_disable)
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+hostname = socket.gethostname().split(".")[0]
 
 env_run_name = os.environ.get("WANDB_NAME", "").strip()
 if not env_run_name:
@@ -263,6 +266,10 @@ def main():
                 denoise_fn=denoise_fn,
                 scheme=diffusion_scheme,
             )
+            pde_params_dir = os.path.join(
+                work_dir, f"checkpoints_pde_solver_{hostname}"
+            )
+            pde_save_every = int(run_sett_pde_solver["save_every_steps"])
             for it in range(pde_solver.sampling_stages):
                 key_step = jax.random.fold_in(PDE_KEY_BASE, it)
                 train_metrics = pde_solver.update_params(key_step)
@@ -280,8 +287,10 @@ def main():
                         )
                     if scalars:
                         writer.write_scalars(step=global_step, scalars=scalars)
-            pde_params_dir = os.path.join(work_dir, "checkpoints_pde_solver")
-            pde_solver.save_params(pde_params_dir)
+                if global_step % pde_save_every == 0:
+                    pde_solver.save_params(pde_params_dir)
+            if int(pde_solver._step) % pde_save_every != 0:
+                pde_solver.save_params(pde_params_dir)
     elif mode == "sample":
         # Sampling/generation should be in double precision
         jax.config.update("jax_enable_x64", True)
@@ -390,7 +399,9 @@ def main():
                 denoise_fn=denoise_fn,
                 scheme=diffusion_scheme,
             )
-            pde_params_dir = os.path.join(work_dir, "checkpoints_pde_solver")
+            pde_params_dir = os.path.join(
+                work_dir, f"checkpoints_pde_solver_{hostname}"
+            )
             pde_solver.load_params(pde_params_dir)
             samples = sample_pde_guided(
                 diffusion_scheme,

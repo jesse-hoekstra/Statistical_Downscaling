@@ -106,18 +106,28 @@ class PDE_solver:
 
         self._step = 0
         self.lambda_L1 = 1.0
+        self._ckpt_mngr = None
 
     def _build_lr_schedule(self):
-        """Create learning-rate schedule (constant or piecewise constant)."""
+        """Create learning-rate schedule (constant or piecewise constant with optional warmup)."""
         boundaries = self.run_sett_pde_solver["boundaries"]
         constant_lr = float(self.run_sett_pde_solver["constant_lr"])
         lr_schedules = self.run_sett_pde_solver["lr_schedules"]
         mode_type = str(self.run_sett_pde_solver["type_lr_schedule"]).lower()
+        warmup_steps = int(self.run_sett_pde_solver.get("warmup_steps", 0))
         if mode_type == "constant":
-            return optax.constant_schedule(constant_lr)
+            base = optax.constant_schedule(constant_lr)
+            peak_lr = constant_lr
         elif mode_type == "sirignano":
             schedules = [optax.constant_schedule(float(lr)) for lr in lr_schedules]
-            return optax.join_schedules(schedules=schedules, boundaries=boundaries)
+            base = optax.join_schedules(schedules=schedules, boundaries=boundaries)
+            peak_lr = float(lr_schedules[0])
+        else:
+            raise ValueError(f"Unknown type_lr_schedule: {mode_type}")
+        if warmup_steps > 0:
+            warmup = optax.linear_schedule(0.0, peak_lr, warmup_steps)
+            return optax.join_schedules([warmup, base], [warmup_steps])
+        return base
 
     def sampler(self, key):
         """Sample interior and terminal training points for the PDE.
@@ -142,7 +152,7 @@ class PDE_solver:
             k2, (self.nSim_interior, self.d), minval=self.x_low, maxval=self.x_high
         )
 
-        std_scale_interior = 0.005 * jnp.std(x_interior)
+        std_scale_interior = 0.05 * jnp.std(x_interior)
         y_int_coupled = (
             x_interior[:num_coupled] @ self.C_prime.T
         ) + std_scale_interior * jax.random.normal(k3, (num_coupled, self.d_prime))
@@ -159,7 +169,7 @@ class PDE_solver:
             k5, (self.nSim_terminal, self.d), minval=self.x_low, maxval=self.x_high
         )
 
-        std_scale_terminal = 0.005 * jnp.std(x_terminal)
+        std_scale_terminal = 0.05 * jnp.std(x_terminal)
         y_term_coupled = (
             x_terminal[:num_term_coupled] @ self.C_prime.T
         ) + std_scale_terminal * jax.random.normal(k6, (num_term_coupled, self.d_prime))
@@ -419,18 +429,20 @@ class PDE_solver:
             ckpt_dir: Directory path to write the checkpoint. This directory will be
                 created if it doesn't exist, and its contents will be overwritten.
         """
-        checkpointer = ocp.StandardCheckpointer()
-        options = ocp.CheckpointManagerOptions(create=True, max_to_keep=2)
-        mngr = ocp.CheckpointManager(
-            os.path.abspath(ckpt_dir), checkpointer, options=options
-        )
+        if self._ckpt_mngr is None:
+            checkpointer = ocp.StandardCheckpointer()
+            options = ocp.CheckpointManagerOptions(create=True, max_to_keep=10)
+            self._ckpt_mngr = ocp.CheckpointManager(
+                os.path.abspath(ckpt_dir), checkpointer, options=options
+            )
         payload = {
             "params": self.params,
             "ema_params": self.ema_params,
             "opt_state": self.opt_state,
         }
         current_step = self._step
-        mngr.save(step=current_step, args=ocp.args.StandardSave(payload))
+        self._ckpt_mngr.save(step=current_step, args=ocp.args.StandardSave(payload))
+        self._ckpt_mngr.wait_until_finished()
         final_path = os.path.join(ckpt_dir, str(current_step))
         print(f"Solver state saved successfully to: {final_path}")
 
@@ -463,6 +475,8 @@ class PDE_solver:
             print(
                 f"Solver state loaded successfully from step {latest_step} at: {ckpt_dir}"
             )
+            return True
 
         except Exception as e:
             print(f"Failed to load solver state. Error: {e}")
+            return False
