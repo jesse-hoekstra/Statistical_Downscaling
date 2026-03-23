@@ -90,11 +90,9 @@ class TrueDataModelUnimodal:
         self.run_sett = run_sett
         run_sett_global = run_sett["global"]
         self.N = run_sett_global["N"]
-        self.d_prime = run_sett_global["d_prime"]
+        self.d = run_sett["data_KS"]["d"]
         self.base_means = (
-            jnp.linspace(-2, 2, self.d_prime)
-            .reshape(self.d_prime, 1)
-            .astype(jnp.float32)
+            jnp.linspace(-2, 2, self.d).reshape(self.d, 1).astype(jnp.float32)
         )
 
     def _step_dist(self, k, prev_val):
@@ -112,8 +110,8 @@ class TrueDataModelUnimodal:
           next_y'[i]  = base_means[i] + 0.5 * prev_y'[i]  + (4*Beta(2,5)-1.5)
         """
         k_y, k_yp = jax.random.split(k)
-        noise_y = jax.random.normal(k_y, shape=(self.d_prime, 1)) * 0.5
-        raw_beta = jax.random.beta(k_yp, a=2.0, b=5.0, shape=(self.d_prime, 1))
+        noise_y = jax.random.normal(k_y, shape=(self.d, 1)) * 0.5
+        raw_beta = jax.random.beta(k_yp, a=2.0, b=5.0, shape=(self.d, 1))
         noise_yp = (raw_beta * 4.0) - 1.5
         noise = jnp.concatenate([noise_y, noise_yp], axis=1)
         return self.base_means + 0.5 * prev_val + noise
@@ -134,7 +132,7 @@ class TrueDataModelUnimodal:
                 - y_prime: Array with shape (N+1, d, 1)
         """
         key, k0 = jax.random.split(key)
-        val0 = self._step_dist(k0, jnp.zeros((self.d_prime, 2), dtype=jnp.float32))
+        val0 = self._step_dist(k0, jnp.zeros((self.d, 2), dtype=jnp.float32))
 
         def step(carry, k):
             next_val = self._step_dist(k, carry)
@@ -146,7 +144,7 @@ class TrueDataModelUnimodal:
         y = traj[..., 0:1]
         yp = traj[..., 1:2]
         if return_latents:
-            lat = jnp.zeros((self.d_prime, 2), dtype=jnp.bool_)
+            lat = jnp.zeros((self.d, 2), dtype=jnp.bool_)
             return y, yp, lat
         return y, yp
 
@@ -157,7 +155,7 @@ class TrueDataModelUnimodal:
         if y.ndim == 3:
             y = y[None, ...]
         B, N_len, d_prime, _ = y.shape
-        assert d_prime == self.d_prime
+        assert d_prime == self.d
 
         prev0 = jnp.zeros((B, 1, d_prime, 1), dtype=jnp.float32)
         prev = jnp.concatenate([prev0, y[:, :-1, :, :]], axis=1)
@@ -174,7 +172,7 @@ class TrueDataModelUnimodal:
         if yp.ndim == 3:
             yp = yp[None, ...]
         B, N_len, d_prime, _ = yp.shape
-        assert d_prime == self.d_prime
+        assert d_prime == self.d
 
         prev0 = jnp.zeros((B, 1, d_prime, 1), dtype=jnp.float32)
         prev = jnp.concatenate([prev0, yp[:, :-1, :, :]], axis=1)
@@ -209,11 +207,9 @@ class TrueDataModelBimodal:
         self.run_sett = run_sett
         run_sett_global = run_sett["global"]
         self.N = run_sett_global["N"]
-        self.d_prime = run_sett_global["d_prime"]
+        self.d = run_sett["data_KS"]["d"]
         self.base_means = (
-            jnp.linspace(-0.5, 0.0, self.d_prime)
-            .reshape(self.d_prime, 1)
-            .astype(jnp.float32)
+            jnp.linspace(-0.5, 0.0, self.d).reshape(self.d, 1).astype(jnp.float32)
         )
 
     def _step_dist(self, k, prev_val, selector):
@@ -238,12 +234,10 @@ class TrueDataModelBimodal:
             s_y'=False -> Normal(-1.5, 0.5^2)
         """
         k_y_l, k_y_r, k_yp_l, k_yp_r = jax.random.split(k, 4)
-        y_left = (jax.random.beta(k_y_l, 2.0, 5.0, shape=(self.d_prime, 1)) * 2.5) - 2.5
-        y_right = jax.random.normal(k_y_r, shape=(self.d_prime, 1)) * 0.5 + 1.5
-        yp_left = jax.random.normal(k_yp_l, shape=(self.d_prime, 1)) * 0.5 - 1.5
-        yp_right = (
-            jax.random.beta(k_yp_r, 5.0, 2.0, shape=(self.d_prime, 1)) * 2.5
-        ) + 0.5
+        y_left = (jax.random.beta(k_y_l, 2.0, 5.0, shape=(self.d, 1)) * 2.5) - 2.5
+        y_right = jax.random.normal(k_y_r, shape=(self.d, 1)) * 0.5 + 1.5
+        yp_left = jax.random.normal(k_yp_l, shape=(self.d, 1)) * 0.5 - 1.5
+        yp_right = (jax.random.beta(k_yp_r, 5.0, 2.0, shape=(self.d, 1)) * 2.5) + 0.5
         noise_y = jnp.where(selector[:, 0:1], y_right, y_left)
         noise_yp = jnp.where(selector[:, 1:2], yp_right, yp_left)
         noise = jnp.concatenate([noise_y, noise_yp], axis=1)
@@ -266,10 +260,8 @@ class TrueDataModelBimodal:
                 - y_prime: Array with shape (N+1, d, 1)
         """
         key, k_sel, k0 = jax.random.split(key, 3)
-        selector = jax.random.bernoulli(k_sel, p=0.5, shape=(self.d_prime, 2))
-        val0 = self._step_dist(
-            k0, jnp.zeros((self.d_prime, 2), dtype=jnp.float32), selector
-        )
+        selector = jax.random.bernoulli(k_sel, p=0.5, shape=(self.d, 2))
+        val0 = self._step_dist(k0, jnp.zeros((self.d, 2), dtype=jnp.float32), selector)
 
         def step(carry, k):
             prev_val, sel = carry
@@ -292,7 +284,7 @@ class TrueDataModelBimodal:
         if y.ndim == 3:
             y = y[None, ...]
         B, N_len, d_prime, _ = y.shape
-        assert d_prime == self.d_prime
+        assert d_prime == self.d
 
         mode = str(mode).lower()
         if mode != "oracle":
@@ -326,7 +318,7 @@ class TrueDataModelBimodal:
         if yp.ndim == 3:
             yp = yp[None, ...]
         B, N_len, d_prime, _ = yp.shape
-        assert d_prime == self.d_prime
+        assert d_prime == self.d
 
         mode = str(mode).lower()
         if mode != "oracle":
@@ -362,18 +354,16 @@ class RobustHedgingModel:
         run_sett_global = run_sett["global"]
         run_sett_robust_hedging = run_sett["robust_hedging"]
         self.N = int(run_sett_global["N"])
-        self.d_prime = int(run_sett_global["d_prime"])
+        self.d = int(run_sett["data_KS"]["d"])
         self.dt = float(run_sett_robust_hedging["dt"])
         self._sqrt_dt = jnp.sqrt(jnp.asarray(self.dt, dtype=jnp.float32))
 
         def _as_vec(x):
             a = jnp.asarray(x, dtype=jnp.float32)
             if a.ndim == 0:
-                return jnp.full((self.d_prime,), a, dtype=jnp.float32)
-            if int(a.shape[0]) != self.d_prime:
-                raise ValueError(
-                    f"Expected length {self.d_prime}, got shape {a.shape}."
-                )
+                return jnp.full((self.d,), a, dtype=jnp.float32)
+            if int(a.shape[0]) != self.d:
+                raise ValueError(f"Expected length {self.d}, got shape {a.shape}.")
             return a.astype(jnp.float32)
 
         self.x0 = float(run_sett_robust_hedging["S0_y"])
@@ -386,8 +376,8 @@ class RobustHedgingModel:
 
     def _step_dist(self, k, prev_val: jnp.ndarray) -> jnp.ndarray:
         k1, k2 = jax.random.split(k, 2)
-        eps1 = jax.random.normal(k1, shape=(self.d_prime,), dtype=jnp.float32)
-        eps2 = jax.random.normal(k2, shape=(self.d_prime,), dtype=jnp.float32)
+        eps1 = jax.random.normal(k1, shape=(self.d,), dtype=jnp.float32)
+        eps2 = jax.random.normal(k2, shape=(self.d,), dtype=jnp.float32)
 
         dx = self.sigma_x * self._sqrt_dt * eps1
         dy = self.sigma_y * self._sqrt_dt * eps2
@@ -411,7 +401,7 @@ class RobustHedgingModel:
         yp = vals[..., 1:2]
 
         if return_latents:
-            lat = jnp.zeros((self.d_prime, 2), dtype=jnp.bool_)
+            lat = jnp.zeros((self.d, 2), dtype=jnp.bool_)
             return y, yp, lat
         return y, yp
 
@@ -421,7 +411,7 @@ class RobustHedgingModel:
         if y.ndim == 3:
             y = y[None, ...]
         B, N_len, d_prime, _ = y.shape
-        assert d_prime == self.d_prime
+        assert d_prime == self.d
 
         prev0 = jnp.broadcast_to(
             self._x0_vec.reshape(1, 1, d_prime, 1), (B, 1, d_prime, 1)
@@ -439,7 +429,7 @@ class RobustHedgingModel:
         if yp.ndim == 3:
             yp = yp[None, ...]
         B, N_len, d_prime, _ = yp.shape
-        assert d_prime == self.d_prime
+        assert d_prime == self.d
 
         prev0 = jnp.broadcast_to(
             self._y0_vec.reshape(1, 1, d_prime, 1), (B, 1, d_prime, 1)
@@ -485,54 +475,134 @@ class RobustHedgingModel:
 
 
 class KSTrueDataModel:
-    """True data model using fluid flows or other real data examples."""
+    """True data model backed by Kuramoto–Sivashinsky simulation data.
+
+    Paired trajectories (y, y') correspond to low-fidelity/low-resolution (LFLR)
+    observations and a temporally-downsampled high-fidelity/high-resolution (HFHR)
+    field, respectively.  All data are loaded from an HDF5 file at construction
+    time so that `sample_true_trajectory` is a pure, jit/vmap-compatible lookup.
+    """
 
     def __init__(self, run_sett: dict):
-        """Initialize the model hyperparameters.
-
-        Args:
-            run_sett: Dictionary with required fields:
-        """
         self.run_sett = run_sett
         self.run_sett_data_KS = run_sett["data_KS"]
-        self.d_prime = self.run_sett["global"]["d_prime"]
-        self.downsampling_factor = (
-            self.run_sett_data_KS["d"] // self.run_sett_data_KS["d_prime"]
-        )
-        self.N = int(self.run_sett["global"]["N"])
-        self.u_hflr_samples, self.u_lflr_samples = self.KS_true_trajectory()
+        self.d = int(self.run_sett_data_KS["d"])
+        self.N = int(run_sett["global"]["N"])
+        self._load_data()
 
-    def sample_true_trajectory(self, key):
-        num = self.u_hflr_samples.shape[0]
-        block_len = int(self.N + 1)
-        start = jax.random.randint(key, shape=(), minval=0, maxval=num - block_len)
-        y_prime = jax.lax.dynamic_slice(
-            self.u_hflr_samples, (start, 0, 0), (block_len, self.d_prime, 1)
-        )
-        y = jax.lax.dynamic_slice(
-            self.u_lflr_samples, (start, 0, 0), (block_len, self.d_prime, 1)
-        )
+    def _load_data(self) -> None:
+        """Load HDF5 file and prepare jnp train/test arrays."""
+        with h5py.File(self.run_sett_data_KS["data_file_name"], "r") as f:
+            u_LFLR = f["LFLR"][()]
+            u_HFHR = f["HFHR"][()]
 
-        return y, y_prime
-
-    def KS_true_trajectory(self):
-        """Load raw KS arrays and create a downsampled HF view.
-
-        Args:
-            file_name: Path to an HDF5 file with datasets 'LFLR', 'HFHR', 't', 'x'.
-
-        Returns:
-          - u_hflr_samples: High-fidelity, high-resolution array (512*320,24,1).
-          - u_lflr_samples: Low-fidelity, low-resolution array (512*320,24,1).
-        """
-        with h5py.File(self.run_sett_data_KS["data_file_name"], "r+") as f1:
-            u_LFLR = f1["LFLR"][()]
-            u_HFHR = f1["HFHR"][()]
-
-        u_HFLR = u_HFHR[:, :, :: self.downsampling_factor]
         u_LFLR = u_LFLR[:, :, ::2]
 
-        u_hflr_samples = u_HFLR.reshape(-1, int(self.d_prime), 1)
-        u_lflr_samples = u_LFLR.reshape(-1, int(self.d_prime), 1)
+        training_samples = self.run_sett["global"]["training_samples"]
+        x_train_eval, _, y_train_eval, y_test = self._get_train_test(
+            u_HFHR, u_LFLR, split=48
+        )
 
-        return u_hflr_samples, u_lflr_samples
+        x_train_eval = x_train_eval[:training_samples]
+        n_x, n_y = x_train_eval.shape[1], y_train_eval.shape[1]
+        factor = int(n_x / n_y)
+        yp_train_eval = x_train_eval[:, ::factor]  # (M, n_y, d)
+
+        # Store as jnp arrays with the trailing singleton expected by the rest
+        # of the codebase: shape (M, N+1, d, 1)
+        self.y_train_eval = jnp.asarray(y_train_eval[..., None], dtype=jnp.float32)
+        self.yp_train_eval = jnp.asarray(yp_train_eval[..., None], dtype=jnp.float32)
+        self.y_test = jnp.asarray(y_test[..., None], dtype=jnp.float32)
+        self._n_train_y = int(self.y_train_eval.shape[0])
+        self._n_train_yp = int(self.yp_train_eval.shape[0])
+
+    def _get_train_test(self, u_HFHR, u_LFLR, split: int):
+        """Reshape raw HDF5 arrays and split into train-eval / test sets.
+
+        Each trajectory tensor has shape (n_traj, time, spatial_flat) where
+        spatial_flat = n_inner * d.  After reshaping and transposing the spatial
+        inner dimension becomes the sample dimension, yielding arrays of shape
+        (n_traj * n_inner, time, d).
+
+        Args:
+            u_HFHR: Raw HFHR array, shape (n_traj, time_HF, n_inner_HF * d).
+            u_LFLR: Raw LFLR array, shape (n_traj, time_LF, n_inner_LF * d).
+            split:  Number of trajectories reserved for the test set.
+
+        Returns:
+            x_train, x_test: HFHR splits, shape (M_*, time_HF, d).
+            y_train, y_test: LFLR splits, shape (M_*, n_y,     d).
+        """
+        d = self.d
+        n_y = self.run_sett_data_KS["n_y"]
+        n_x = self.run_sett_data_KS["n_x"]  # use the full HFHR time axis
+
+        u_HFHR_train_eval, u_HFHR_test = u_HFHR[:-split], u_HFHR[-split:]
+        u_LFLR_train_eval, u_LFLR_test = u_LFLR[:-split], u_LFLR[-split:]
+
+        n_samples_train_eval = int(u_HFHR_train_eval.shape[0])
+        n_samples_test = int(u_HFHR_test.shape[0])
+        n_samples_inner_x = int(u_HFHR_train_eval.shape[2] / d)
+        n_samples_inner_y = int(u_LFLR_train_eval.shape[2] / d)
+
+        x_samples_train_eval = (
+            u_HFHR_train_eval[:, :n_x, :]
+            .reshape(n_samples_train_eval, n_x, n_samples_inner_x, d)
+            .transpose(0, 2, 1, 3)
+            .reshape(n_samples_train_eval * n_samples_inner_x, n_x, d)
+        )
+        x_samples_test = (
+            u_HFHR_test[:, :n_x, :]
+            .reshape(n_samples_test, n_x, n_samples_inner_x, d)
+            .transpose(0, 2, 1, 3)
+            .reshape(n_samples_test * n_samples_inner_x, n_x, d)
+        )
+        y_samples_train_eval = (
+            u_LFLR_train_eval[:, :n_y, :]
+            .reshape(n_samples_train_eval, n_y, n_samples_inner_y, d)
+            .transpose(0, 2, 1, 3)
+            .reshape(n_samples_train_eval * n_samples_inner_y, n_y, d)
+        )
+        y_samples_test = (
+            u_LFLR_test[:, :n_y, :]
+            .reshape(n_samples_test, n_y, n_samples_inner_y, d)
+            .transpose(0, 2, 1, 3)
+            .reshape(n_samples_test * n_samples_inner_y, n_y, d)
+        )
+
+        return (
+            x_samples_train_eval,
+            x_samples_test,
+            y_samples_train_eval,
+            y_samples_test,
+        )
+
+    def sample_true_trajectory(self, key):
+        """Sample a single (y, y') pair uniformly from the training set.
+
+        Compatible with ``jax.vmap`` and ``jax.jit``.
+
+        Args:
+            key: JAX PRNG key.
+
+        Returns:
+            y:  shape (N+1, d, 1) — LFLR observation.
+            yp: shape (N+1, d, 1) — temporally-downsampled HFHR field.
+        """
+        key_y, key_yp = jax.random.split(key)
+        idx_y = jax.random.randint(key_y, shape=(), minval=0, maxval=self._n_train_y)
+        idx_yp = jax.random.randint(key_yp, shape=(), minval=0, maxval=self._n_train_yp)
+        return (
+            jnp.take(self.y_train_eval, idx_y, axis=0),
+            jnp.take(self.yp_train_eval, idx_yp, axis=0),
+        )
+
+    def KS_true_trajectory(self):
+        """Return pre-loaded (y_train, yp_train, y_test) arrays.
+
+        Returns:
+            y_train:  (M_train, N+1, d, 1)
+            yp_train: (M_train, N+1, d, 1)
+            y_test:   (M_test,  N+1, d, 1)
+        """
+        return self.y_train_eval, self.yp_train_eval, self.y_test

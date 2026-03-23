@@ -201,7 +201,7 @@ def build_eval_batch(
         chunk_size=chunk_size,
         fold_in_tag=int(fold_in_tag),
         N=int(run_sett_global["N"]),
-        d_prime=int(run_sett_global["d_prime"]),
+        d_prime=int(run_sett["data_KS"]["d"]),
     )
 
     return EvalBatch(
@@ -331,7 +331,7 @@ def _sliced_wasserstein_w2(
     Y: np.ndarray,
     num_proj: int = 128,
     seed: int = 0,
-) -> Tuple[float, float]:
+) -> Tuple[float, float, float]:
     """
     Sliced Wasserstein (W2) between empirical distributions in R^P.
     For each random unit direction theta:
@@ -339,8 +339,9 @@ def _sliced_wasserstein_w2(
     Aggregate over projections:
       SWD2 = mean_theta SWD2(theta)
       SWD  = sqrt(SWD2)
+      SWD_std = std of per-projection SWD(theta) = sqrt(SWD2(theta))
 
-    Returns (SWD, SWD2).
+    Returns (SWD, SWD2, SWD_std).
     """
     rng = np.random.default_rng(int(seed))
     X = np.asarray(X, dtype=np.float32)
@@ -350,7 +351,7 @@ def _sliced_wasserstein_w2(
     By, _ = Y.shape
     m = min(Bx, By)
     if m <= 1:
-        return float("nan"), float("nan")
+        return float("nan"), float("nan"), float("nan")
 
     X = X[:m]
     Y = Y[:m]
@@ -365,9 +366,12 @@ def _sliced_wasserstein_w2(
     projX.sort(axis=0)
     projY.sort(axis=0)
 
-    swd2 = float(np.mean((projX - projY) ** 2))
+    per_proj_swd2 = np.mean((projX - projY) ** 2, axis=0)  # (K,)
+    per_proj_swd = np.sqrt(np.maximum(per_proj_swd2, 0.0))  # (K,)
+    swd2 = float(np.mean(per_proj_swd2))
     swd = float(np.sqrt(max(swd2, 0.0)))
-    return swd, swd2
+    swd_std = float(np.std(per_proj_swd))
+    return swd, swd2, swd_std
 
 
 def compute_traj_dist_metrics_from_batch(
@@ -432,7 +436,9 @@ def compute_traj_dist_metrics_from_batch(
     )
 
     num_proj = int(run_sett_metrics["swd"]["swd_num_proj"])
-    swd, swd2 = _sliced_wasserstein_w2(X_true, X_flow, num_proj=num_proj, seed=swd_seed)
+    swd, swd2, _ = _sliced_wasserstein_w2(
+        X_true, X_flow, num_proj=num_proj, seed=swd_seed
+    )
 
     out = {
         "eval/traj/B_used": float(B),
@@ -764,7 +770,7 @@ def plot_hist_from_batch(
     num_bins: int = 50,
 ) -> str:
     run_sett_global = run_sett["global"]
-    d_prime = int(run_sett_global["d_prime"])
+    d_prime = int(run_sett["data_KS"]["d"])
     ty = batch.true_y[:, t, :, 0]
     fy = batch.flow_y[:, t, :, 0]
     typ = batch.true_yp[:, t, :, 0]

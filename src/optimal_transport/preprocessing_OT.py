@@ -42,7 +42,6 @@ class DataNormalizer:
         self.global_sett = run_sett["global"]
         self.seed = int(self.global_sett["seed"])
         self.N = int(self.global_sett["N"])
-        self.d = int(self.global_sett["d_prime"])
         self.use_data_normalization = bool(
             self.preprocessing_sett["use_data_normalization"]
         )
@@ -80,11 +79,7 @@ class DataNormalizer:
         num_samples = int(self.num_samples)
         chunk_size = int(self.chunk_size)
 
-        sum_y = jnp.zeros((N_len, self.d, 1), dtype=jnp.float32)
-        sumsq_y = jnp.zeros((N_len, self.d, 1), dtype=jnp.float32)
-        sum_yp = jnp.zeros((N_len, self.d, 1), dtype=jnp.float32)
-        sumsq_yp = jnp.zeros((N_len, self.d, 1), dtype=jnp.float32)
-
+        sum_y = sum_yp = sumsq_y = sumsq_yp = None  # initialised after first batch
         total = 0
         cur_key = norm_key
         remaining = num_samples
@@ -95,11 +90,19 @@ class DataNormalizer:
             keys = jax.random.split(use_key, cur)
             y, yp = jax.vmap(self.true_data_model.sample_true_trajectory)(
                 keys
-            )  # (cur,N+1,d,1)
+            )  # (cur, N+1, d, 1)
+
+            # Infer d from data on the first iteration
+            if sum_y is None:
+                d = y.shape[2]
+                sum_y = jnp.zeros((N_len, d, 1), dtype=jnp.float32)
+                sumsq_y = jnp.zeros((N_len, d, 1), dtype=jnp.float32)
+                sum_yp = jnp.zeros((N_len, d, 1), dtype=jnp.float32)
+                sumsq_yp = jnp.zeros((N_len, d, 1), dtype=jnp.float32)
 
             if mode == "global":
-                y_flat = y.reshape((cur * N_len, self.d, 1))
-                yp_flat = yp.reshape((cur * N_len, self.d, 1))
+                y_flat = y.reshape((cur * N_len, d, 1))
+                yp_flat = yp.reshape((cur * N_len, d, 1))
                 sum_y += jnp.sum(y_flat, axis=0, keepdims=True).repeat(N_len, axis=0)
                 sumsq_y += jnp.sum(y_flat * y_flat, axis=0, keepdims=True).repeat(
                     N_len, axis=0

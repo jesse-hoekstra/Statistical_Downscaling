@@ -89,7 +89,7 @@ key_suffix = f"_{gpu_tag_env}" if gpu_tag_env else ""
 
 if use_wandb:
     base_writer = metric_writers.create_default_writer(work_dir, asynchronous=False)
-    project = os.environ.get("WANDB_PROJECT", "optimal-transport")
+    project = os.environ.get("WANDB_PROJECT", "OT_flow")
     entity = os.environ.get("WANDB_ENTITY")
     run_name = os.environ.get("WANDB_NAME", env_run_name)
 
@@ -151,6 +151,7 @@ def main():
     log_train_every = int(run_sett_logging["log_train_every"])
     log_eval_every = int(run_sett_logging["log_eval_every"])
     kl_warmup = int(run_sett_beta["kl_only_warmup_steps"])
+    save_every = int(run_sett_logging["save_every"])
 
     if train_transform_mode == "train":
         for it in range(num_iterations):
@@ -201,6 +202,13 @@ def main():
                 except Exception as e:
                     print(f"evaluate_all_with_one_batch failed: {e}")
 
+            if (save_every > 0) and (global_step % save_every == 0):
+                try:
+                    ckpt_dir = os.path.join(work_dir, "checkpoints_policy_gradient")
+                    policy_gradient.save_params(ckpt_dir)
+                except Exception as e:
+                    print(f"Warning: periodic save failed at step {global_step}: {e}")
+
         if use_wandb:
             try:
                 writer.flush()
@@ -218,17 +226,12 @@ def main():
             print(f"Warning: saving PolicyGradient state failed: {e}")
 
     if train_transform_mode == "transform":
-        _, u_lflr_samples = true_data_model.KS_true_trajectory()
+        _, _, y_samples_test = true_data_model.KS_true_trajectory()
         settings_gen = os.path.join(project_root, "src/generation/settings_GEN.yaml")
         with open(settings_gen, "r") as f:
             run_sett_gen = yaml.safe_load(f)
         num_conditionings = int(run_sett_gen["pde_solver"]["num_conditionings"])
-        d_prime = u_lflr_samples.shape[1]
-        N_len = int(N + 1)
-        num_blocks = int(num_conditionings / N_len)
-        y_trajs = u_lflr_samples[:num_conditionings].reshape(
-            num_blocks, N_len, d_prime, 1
-        )
+        y_trajs = y_samples_test[:num_conditionings]
         try:
             ckpt_dir = os.path.join(work_dir, "checkpoints_policy_gradient")
             ok = policy_gradient.load_params(ckpt_dir)
@@ -240,11 +243,10 @@ def main():
             print(f"Warning: loading PolicyGradient state failed: {e}")
         try:
             key_transform = jax.random.fold_in(key_master, RNG_NAMESPACE + 333_333)
-            transport_keys = jax.random.split(key_transform, num_blocks)
+            transport_keys = jax.random.split(key_transform, num_conditionings)
             yp_trajs = jax.vmap(
                 policy_gradient.model.transport_y_to_yp, in_axes=(0, None, 0)
             )(y_trajs, policy_gradient.params, transport_keys)
-            yp_trajs = yp_trajs.reshape(-1, d_prime, 1)
             out_path = os.path.join(work_dir, "yp_trajs.h5")
             with h5py.File(out_path, "w") as f:
                 f.create_dataset(

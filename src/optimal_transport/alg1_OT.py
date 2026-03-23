@@ -120,7 +120,7 @@ class ConditionalSplineCouplingFlow(hk.Module):
         super().__init__(name=name)
         self.run_sett_marginal_flow = run_sett["marginal_flow"]
         self.run_sett_global = run_sett["global"]
-        self.d = int(self.run_sett_global["d_prime"])
+        self.d = int(run_sett["data_KS"]["d"])
         self.context_dim = int(context_dim)
         self.num_layers = int(self.run_sett_marginal_flow["num_layers"])
         self.hidden_size = int(self.run_sett_marginal_flow["hidden_size"])
@@ -198,7 +198,7 @@ class RhoNet(hk.Module):
         super().__init__(name=name)
         self.run_sett_global = run_sett["global"]
         self.run_sett_correlation_flow = run_sett["correlation_flow"]
-        self.d = int(self.run_sett_global["d_prime"])
+        self.d = int(run_sett["data_KS"]["d"])
         self.time_emb_dim = int(self.run_sett_global["time_emb_dim"])
         self.hidden_size = int(self.run_sett_correlation_flow["hidden_size"])
         self.rho_max = float(self.run_sett_correlation_flow["rho_max"])
@@ -234,7 +234,7 @@ class NormalizingFlowModel:
         self.run_sett_correlation_flow = run_sett["correlation_flow"]
         self.run_sett_preprocessing = run_sett["preprocessing"]
 
-        self.d = int(self.run_sett_global["d_prime"])
+        self.d = int(run_sett["data_KS"]["d"])
         self.N = int(self.run_sett_global["N"])
         self.N_len = int(self.N + 1)
         self.seed = int(self.run_sett_global["seed"])
@@ -555,13 +555,16 @@ class NormalizingFlowModel:
         """Transport a single ORIGINAL-space trajectory y -> yp via learned flow.
 
         Args:
-            y_traj: Array with shape (N+1, d, 1) in ORIGINAL space.
+            y_traj: Array with shape (N+1, d) or (N+1, d, 1) in ORIGINAL space.
             params: Haiku params pytree for the model (matching init).
             key: JAX PRNG key for sampling the copula noise.
 
         Returns:
-            yp: Array with shape (N+1, d, 1) in ORIGINAL space.
+            yp: Array with shape matching y_traj input in ORIGINAL space.
         """
+        squeeze = y_traj.ndim == 2
+        if squeeze:
+            y_traj = y_traj[..., None]
         assert y_traj.shape == (
             self.N_len,
             self.d,
@@ -573,6 +576,8 @@ class NormalizingFlowModel:
         yp_traj_norm = self._hk_transport.apply(params, y_traj_norm, key)
         _, yp_traj = self.normalizer.transform("denormalize", y_traj_norm, yp_traj_norm)
 
+        if squeeze:
+            yp_traj = yp_traj[..., 0]
         return yp_traj
 
 
@@ -598,7 +603,7 @@ class PolicyGradient:
         self.run_sett_baseline_fitting = run_sett["baseline_fitting"]
         self.run_sett_ema = run_sett["ema"]
 
-        self.d = int(self.run_sett_global["d_prime"])
+        self.d = int(run_sett["data_KS"]["d"])
         self.N = int(self.run_sett_global["N"])
         self.N_len = int(self.N + 1)
         self.B = int(self.run_sett_global["B"])
@@ -674,7 +679,6 @@ class PolicyGradient:
         warmup_steps = int(self.run_sett_lr["warmup_steps"])
         decay_steps = int(self.run_sett_lr["decay_steps"])
         end_value = float(self.run_sett_lr["end_value"])
-        constant_lr = float(self.run_sett_lr["constant_lr"])
         step_decay_boundaries = self.run_sett_lr["step_decay_boundaries"]
         step_decay_factor = float(self.run_sett_lr["step_decay_factor"])
         mode_type = str(self.run_sett_lr["type"]).lower()
@@ -684,7 +688,7 @@ class PolicyGradient:
             transition_steps=max(warmup_steps, 1),
         )
         if mode_type == "constant":
-            return optax.constant_schedule(constant_lr)
+            return optax.constant_schedule(end_value)
         elif mode_type == "cosine":
             tail = optax.cosine_decay_schedule(
                 init_value=peak_value,
