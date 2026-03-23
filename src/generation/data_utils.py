@@ -103,3 +103,45 @@ def get_ks_dataset(
     ds = ds.prefetch(tf.data.AUTOTUNE)
     ds = ds.as_numpy_iterator()
     return ds
+
+
+def get_train_test(u_HFHR, u_LFLR, split, settings):
+    u_HFHR_train_eval = u_HFHR[:-split]
+    u_LFLR_train_eval = u_LFLR[:-split]
+    u_HFHR_test = u_HFHR[-split:]
+    u_LFLR_test = u_LFLR[-split:]
+
+    d = int(settings["d"])
+    n_x = int(settings["n_x"])
+    n_y = int(settings["n_y"])
+    n_samples_train_eval = int(u_HFHR_train_eval.shape[0])
+    n_samples_test = int(u_HFHR_test.shape[0])
+    n_samples_inner_x = int(u_HFHR_train_eval.shape[2] // d)
+    n_samples_inner_y = int(u_LFLR_train_eval.shape[2] // d)
+
+    x_samples_train_eval = (
+        u_HFHR_train_eval[:, :n_x, :]
+        .reshape(n_samples_train_eval, n_x, n_samples_inner_x, d)
+        .transpose(0, 2, 1, 3)
+        .reshape(n_samples_train_eval * n_samples_inner_x, n_x, d)
+    )
+    x_samples_test = (
+        u_HFHR_test[:, :n_x, :]
+        .reshape(n_samples_test, n_x, n_samples_inner_x, d)
+        .transpose(0, 2, 1, 3)
+        .reshape(n_samples_test * n_samples_inner_x, n_x, d)
+    )
+    y_samples_train_eval = (
+        u_LFLR_train_eval[:, :n_y, :]
+        .reshape(n_samples_train_eval, n_y, n_samples_inner_y, d)
+        .transpose(0, 2, 1, 3)
+        .reshape(n_samples_train_eval * n_samples_inner_y, n_y, d)
+    )
+    y_samples_test = (
+        u_LFLR_test[:, :n_y, :]
+        .reshape(n_samples_test, n_y, n_samples_inner_y, d)
+        .transpose(0, 2, 1, 3)
+        .reshape(n_samples_test * n_samples_inner_y, n_y, d)
+    )
+
+    return x_samples_train_eval, x_samples_test, y_samples_train_eval, y_samples_test

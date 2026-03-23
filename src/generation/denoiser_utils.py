@@ -134,7 +134,7 @@ def build_model(denoiser_model, diffusion_scheme, data_std: float):
         dfn.DenoisingModel ready for training.
     """
     return dfn.DenoisingModel(
-        input_shape=(int(run_sett["global"]["d"]), 1),
+        input_shape=(int(run_sett["global"]["n_x"]), int(run_sett["global"]["d"])),
         denoiser=denoiser_model,
         noise_sampling=dfn_lib.time_uniform_sampling(
             diffusion_scheme,
@@ -159,7 +159,7 @@ def build_trainer(model):
     """
     return dfn.DenoisingTrainer(
         model=model,
-        rng=jax.random.PRNGKey(int(run_sett["global"]["rng_key"])),
+        rng=jax.random.PRNGKey(int(run_sett["global"]["seed"])),
         optimizer=optax.chain(
             optax.clip_by_global_norm(float(run_sett["optimizer"]["clip_norm"])),
             optax.adam(

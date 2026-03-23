@@ -16,30 +16,6 @@ from src.generation.swirl_dynamics_new_guidance.guidance import LinearConstraint
 from src.generation.swirl_dynamics_new_sampler.samplers import NewDriftSdeSampler
 
 
-def _build_C_prime(d: int, d_prime: int) -> jax.Array:
-    """Construct a stride-based downsampling operator C'.
-
-    The operator maps a high-resolution vector of length `d` to a low-resolution
-    vector of length `d_prime` by picking every `downsampling_factor = d // d_prime`
-    entry. This matches the way LR observations are constructed in the dataset.
-
-    Args:
-        d: High-resolution spatial length.
-        d_prime: Low-resolution length.
-
-    Returns:
-        Array of shape `(d_prime, d)` representing C'.
-    """
-    downsampling_factor = d // d_prime
-
-    return jnp.array(
-        [
-            [1 if j == downsampling_factor * i else 0 for j in range(d)]
-            for i in range(d_prime)
-        ]
-    )
-
-
 def sample_unconditional(
     diffusion_scheme,
     denoise_fn,
@@ -61,7 +37,7 @@ def sample_unconditional(
         Array of generated samples with shape `(num_samples, num_plots, d, 1)`.
     """
     sampler = dfn_lib.SdeSampler(
-        input_shape=(run_sett["global"]["d"], 1),
+        input_shape=(run_sett["global"]["n_x"], run_sett["global"]["d"]),
         integrator=solver_lib.EulerMaruyama(),
         tspan=dfn_lib.exponential_noise_decay(
             diffusion_scheme,
@@ -111,12 +87,11 @@ def sample_wan_guided(
     Returns:
         Array with shape `(num_samples, num_conditions, d, 1)`.
     """
-    downsampling_factor = run_sett["global"]["d"] // run_sett["global"]["d_prime"]
-    C_prime = _build_C_prime(
-        int(run_sett["global"]["d"]), run_sett["global"]["d_prime"]
-    )
+    downsampling_factor = int(run_sett["global"]["n_x"] // run_sett["global"]["n_y"])
 
-    if False:  # Use the LinearConstraint guidance transform, own code
+    if (
+        False
+    ):  # Use the LinearConstraint guidance transform, own code, delete in next update
         guidance_transform = LinearConstraint.create(
             C_prime=C_prime,
             y_bar=y_bar,
@@ -129,7 +104,7 @@ def sample_wan_guided(
         )
 
     sampler = dfn_lib.SdeSampler(
-        input_shape=(run_sett["global"]["d"], 1),
+        input_shape=(run_sett["global"]["n_x"], run_sett["global"]["d"]),
         integrator=solver_lib.EulerMaruyama(),
         tspan=dfn_lib.exponential_noise_decay(
             diffusion_scheme,
@@ -189,7 +164,10 @@ def sample_pde_guided(
             f"`y` must have leading size {num_conditionings}, but got {y.shape[0]}"
         )
     sampler = NewDriftSdeSampler(
-        input_shape=(pde_solver.run_sett_global["d"], 1),
+        input_shape=(
+            pde_solver.run_sett_global["n_x"],
+            pde_solver.run_sett_global["d"],
+        ),
         integrator=solver_lib.EulerMaruyama(),
         tspan=dfn_lib.exponential_noise_decay(
             diffusion_scheme,

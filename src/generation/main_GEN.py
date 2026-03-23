@@ -29,12 +29,20 @@ from src.generation.utils_metrics import (
     calculate_kld_pooled,
     calculate_wass1_pooled,
 )
-from src.generation.data_utils import get_raw_datasets, get_ks_dataset
+from src.optimal_transport.utils_OT import (
+    _w2_1d_sq,
+    _ks_1d,
+    _sliced_wasserstein_w2,
+    _mmd2_rbf_rff,
+    _median_heuristic_sigma,
+)
+from src.generation.data_utils import get_raw_datasets, get_ks_dataset, get_train_test
 from src.generation.sampler_utils import (
     sample_unconditional,
     sample_pde_guided,
     sample_wan_guided,
 )
+from src.generation.dps_sampler import sample_dps
 from src.generation.hyperparameter_utils import hyperparameter_step
 
 parser = argparse.ArgumentParser()
@@ -135,23 +143,18 @@ def _save_samples_h5(path, samples, *, y_bar=None, run_settings=None, rng_key=No
         f.create_dataset("samples", data=arr)
 
 
+def _flatten_data(arr):
+    """Flatten channel dim into batch: (B, n_x, d) -> (B*d, n_x, 1)."""
+    B, n_x, d = arr.shape
+    return arr.transpose(0, 2, 1).reshape(B * d, n_x, 1)
+
+
 def _load_samples_h5(path, *, as_jax=True):
     """Load samples from an HDF5 file and return a JAX array by default."""
     with h5py.File(path, "r") as f:
         samples_np = f["samples"][()]
 
     return jnp.asarray(samples_np) if as_jax else samples_np
-
-
-def _build_C_prime(d: int, d_prime: int) -> jax.Array:
-    downsampling_factor = d // d_prime
-
-    return jnp.array(
-        [
-            [1 if j == downsampling_factor * i else 0 for j in range(d)]
-            for i in range(d_prime)
-        ]
-    )
 
 
 def main():
@@ -185,11 +188,15 @@ def main():
     )
     u_LFLR = u_LFLR[:, :, ::2]
 
-    u_hfhr_samples = u_HFHR.reshape(-1, int(run_sett_global["d"]), 1)
-    u_lflr_samples = u_LFLR.reshape(-1, int(run_sett_global["d_prime"]), 1)
-    DATA_STD = u_hfhr_samples.std()
+    x_samples_train_eval, x_samples_test, y_samples_train_eval, y_samples_test = (
+        get_train_test(u_HFHR, u_LFLR, 48, run_sett_global)
+    )
+
+    DATA_STD = x_samples_train_eval.std()
 
     if mode == "train":
+        training_samples = run_sett_global["training_sampels"]
+        x_samples_train_eval = x_samples_train_eval[training_samples]
         # Training should be in single precision
         jax.config.update("jax_enable_x64", False)
 
@@ -233,7 +240,7 @@ def main():
 
             run_training(
                 train_dataloader=get_ks_dataset(
-                    u_hfhr_samples,
+                    x_samples_train_eval,
                     split="train[:75%]",
                     batch_size=batch_size,
                     seed=denoiser_seed_train,
@@ -244,7 +251,7 @@ def main():
                 metric_writer=writer,
                 metric_aggregation_steps=metric_aggregation_steps,
                 eval_dataloader=get_ks_dataset(
-                    u_hfhr_samples,
+                    x_samples_train_eval,
                     split="train[75%:]",
                     batch_size=batch_size,
                     seed=denoiser_seed_eval,
@@ -312,15 +319,16 @@ def main():
             run_name = f"run_seed{seed}"
             saved_dir = os.path.join(project_root, "main_OT", run_name)
             with h5py.File(saved_dir + "/yp_trajs.h5", "r") as f1:
-                y = f1["yp_trajs"][()]
+                y = f1["yp_trajs"][()].squeeze(-1)
         else:
-            y = u_lflr_samples[:num_conditionings]
+            y = y_samples_test[:num_conditionings]
         denoise_fn = restore_denoise_fn(
             f"{work_dir}/checkpoints_denoise_model", denoiser_model
         )
         key_uncond = jax.random.fold_in(SAMPLE_KEY_BASE, 0)
         key_wan = jax.random.fold_in(SAMPLE_KEY_BASE, 1)
         key_cond = jax.random.fold_in(SAMPLE_KEY_BASE, 2)
+        key_dps = jax.random.fold_in(SAMPLE_KEY_BASE, 3)
         sample_file = os.path.join(work_dir, f"samples_{generation_type}.h5")
         if generation_type == "unconditional":
             samples = sample_unconditional(
@@ -392,6 +400,18 @@ def main():
                 print(samples.std())
                 print(samples.shape)
                 _save_samples_h5(sample_file, samples)
+        elif generation_type == "dps":
+            samples = sample_dps(
+                diffusion_scheme,
+                denoise_fn,
+                y_bar=y,
+                rng_key=key_dps,
+                num_samples=num_gen_samples,
+                run_sett=run_sett,
+            )
+            print(samples.std())
+            print(samples.shape)
+            _save_samples_h5(sample_file, samples)
         elif generation_type == "conditional":
             pde_solver = KSStatisticalDownscalingPDESolver(
                 samples=u_hfhr_samples,
@@ -417,107 +437,123 @@ def main():
     elif mode == "eval":
         # Evaluation/metrics in double precision
         jax.config.update("jax_enable_x64", True)
-        C_prime = _build_C_prime(run_sett_global["d"], run_sett_global["d_prime"])
-
         sample_file = os.path.join(
             work_dir, f"samples_{run_sett_global['generation_type']}.h5"
         )
-        samples = _load_samples_h5(sample_file, as_jax=True)
+        samples_raw = _load_samples_h5(sample_file, as_jax=True)  # (N, C, n_x, d)
+        samples = _flatten_data(
+            samples_raw.reshape(-1, *samples_raw.shape[-2:])
+        )  # (B, n_x, 1)
+        samples = samples[:, None, :, :]  # (B, 1, n_x, 1) — dummy C dim for metrics
+        x_ref_train = _flatten_data(
+            x_samples_train_eval[x_samples_train_eval.shape[0] // 10 :]
+        )
+        x_ref_test = _flatten_data(x_samples_test)
+        x_ref = jnp.concatenate([x_ref_train, x_ref_test], axis=0)[
+            :65536
+        ]  # (M, n_x, 1)
 
+        settings_ot = os.path.join(
+            project_root, "src/optimal_transport/settings_OT.yaml"
+        )
+        with open(settings_ot, "r") as f:
+            run_sett_ot = yaml.safe_load(f)
+        seed = int(run_sett_ot["global"]["seed"])
         if run_sett_global["debiased_conditioning"]:
-            settings_ot = os.path.join(
-                project_root, "src/optimal_transport/settings_OT.yaml"
-            )
-            with open(settings_ot, "r") as f:
-                run_sett_ot = yaml.safe_load(f)
-            seed = int(run_sett_ot["global"]["seed"])
-            run_name = f"run_seed{seed}"
+            run_name = f"run_seed{seed}_cuda0"
             saved_dir = os.path.join(project_root, "main_OT", run_name)
             with h5py.File(saved_dir + "/yp_trajs.h5", "r") as f1:
-                y = f1["yp_trajs"][()]
+                y = f1["yp_trajs"][()].squeeze(-1)
         else:
-            y = u_lflr_samples[:num_conditionings]
+            y = y_samples_test[:num_conditionings]
 
         constraint_rmse, constraint_rmse_sd = calculate_constraint_rmse(
-            samples,
+            samples_raw,
             y,
-            C_prime,
         )
-        kld, kld_sd = calculate_kld_pooled(
-            samples, u_hfhr_samples, epsilon=float(run_sett_metrics["epsilon"])
+        gen_flat = np.asarray(samples[:, 0, :, 0])  # (B*d, n_x)
+        ref_flat = np.asarray(x_ref[:, :, 0])  # (M,   n_x)
+        n_x_eval = gen_flat.shape[1]
+
+        # W2_avg and KS_avg: per time-step, then mean ± std over time steps
+        w2_list = [_w2_1d_sq(gen_flat[:, t], ref_flat[:, t]) for t in range(n_x_eval)]
+        ks_list = [_ks_1d(gen_flat[:, t], ref_flat[:, t]) for t in range(n_x_eval)]
+        w2_avg, w2_std = float(np.mean(w2_list)), float(np.std(w2_list))
+        ks_avg, ks_std = float(np.mean(ks_list)), float(np.std(ks_list))
+
+        # SWD: mean ± std over projections
+        swd, _, swd_std = _sliced_wasserstein_w2(
+            gen_flat, ref_flat, num_proj=256, seed=seed
         )
+
+        # MMD2: mean ± std over 5 random seeds
+        sigma_mmd = _median_heuristic_sigma(
+            gen_flat, ref_flat, seed=seed, max_pairs=4096
+        )
+        mmd2_runs = [
+            _mmd2_rbf_rff(
+                gen_flat, ref_flat, sigma=sigma_mmd, num_features=256, seed=seed + i
+            )
+            for i in range(5)
+        ]
+        mmd2, mmd2_std = float(np.mean(mmd2_runs)), float(np.std(mmd2_runs))
+
+        N, C, nx, d_ch = samples_raw.shape
+        samples_for_var = samples_raw.reshape(N, C, nx * d_ch, 1)
         sample_variability, sample_variability_sd = calculate_sample_variability(
-            samples
+            samples_for_var
         )
+
         melr_weighted, melr_weighted_sd = calculate_melr_pooled(
             samples,
-            u_hfhr_samples,
-            sample_shape=(run_sett_global["d"],),
+            x_ref,
+            sample_shape=(int(run_sett_global["n_x"]),),
             weighted=True,
             epsilon=float(run_sett_metrics["epsilon"]),
         )
-
         melr_unweighted, melr_unweighted_sd = calculate_melr_pooled(
             samples,
-            u_hfhr_samples,
-            sample_shape=(run_sett_global["d"],),
+            x_ref,
+            sample_shape=(int(run_sett_global["n_x"]),),
             weighted=False,
             epsilon=float(run_sett_metrics["epsilon"]),
         )
-
-        wass1, wass1_sd = calculate_wass1_pooled(
-            samples,
-            u_hfhr_samples,
-            num_bins=1000,
+        wass1, wass1_sd = calculate_wass1_pooled(samples, x_ref, num_bins=1000)
+        kld, kld_sd = calculate_kld_pooled(
+            samples, x_ref, epsilon=float(run_sett_metrics["epsilon"])
         )
 
+        print(f"cRMSE:          {constraint_rmse:.6f} (sd: {constraint_rmse_sd:.6f})")
+        print(f"W2_avg:         {w2_avg:.6f} (sd: {w2_std:.6f})")
+        print(f"KS_avg:         {ks_avg:.6f} (sd: {ks_std:.6f})")
+        print(f"SWD:            {swd:.6f} (sd: {swd_std:.6f})")
+        print(f"MMD2:           {mmd2:.6f} (sd: {mmd2_std:.6f})")
         print(
-            "constraint_rmse: ",
-            constraint_rmse,
-            "(sd:",
-            constraint_rmse_sd,
-            ")",
-            "sample_variability: ",
-            sample_variability,
-            "(sd:",
-            sample_variability_sd,
-            ")",
-            "melr_unweighted: ",
-            melr_unweighted,
-            "(sd:",
-            melr_unweighted_sd,
-            ")",
-            "melr_weighted: ",
-            melr_weighted,
-            "(sd:",
-            melr_weighted_sd,
-            ")",
-            "kld: ",
-            kld,
-            "(sd:",
-            kld_sd,
-            ")",
-            "wass1: ",
-            wass1,
-            "(sd:",
-            wass1_sd,
-            ")",
+            f"Variability:    {sample_variability:.6f} (sd: {sample_variability_sd:.6f})"
         )
+        print(f"MELR_weighted:  {melr_weighted:.6f} (sd: {melr_weighted_sd:.6f})")
+        print(f"MELR_unweighted:{melr_unweighted:.6f} (sd: {melr_unweighted_sd:.6f})")
+        print(f"Wass1:          {wass1:.6f} (sd: {wass1_sd:.6f})")
+        print(f"KLD:            {kld:.6f} (sd: {kld_sd:.6f})")
         if use_wandb:
-            writer.write_scalar("metrics/constraint_rmse", float(constraint_rmse))
-            writer.write_scalar("metrics/constraint_rmse_sd", float(constraint_rmse_sd))
-            writer.write_scalar("metrics/kld", float(kld))
-            writer.write_scalar("metrics/kld_sd", float(kld_sd))
-            writer.write_scalar("metrics/sample_variability", float(sample_variability))
-            writer.write_scalar(
-                "metrics/sample_variability_sd", float(sample_variability_sd)
-            )
-            writer.write_scalar("metrics/melr_weighted", float(melr_weighted))
-            writer.write_scalar("metrics/melr_weighted_sd", float(melr_weighted_sd))
-            writer.write_scalar("metrics/melr_unweighted", float(melr_unweighted))
-            writer.write_scalar("metrics/melr_unweighted_sd", float(melr_unweighted_sd))
-            writer.write_scalar("metrics/wass1", float(wass1))
-            writer.write_scalar("metrics/wass1_sd", float(wass1_sd))
+            writer.write_scalar("metrics/W2_avg", w2_avg)
+            writer.write_scalar("metrics/W2_avg_sd", w2_std)
+            writer.write_scalar("metrics/KS_avg", ks_avg)
+            writer.write_scalar("metrics/KS_avg_sd", ks_std)
+            writer.write_scalar("metrics/SWD", swd)
+            writer.write_scalar("metrics/SWD_sd", swd_std)
+            writer.write_scalar("metrics/MMD2", mmd2)
+            writer.write_scalar("metrics/MMD2_sd", mmd2_std)
+            writer.write_scalar("metrics/Variability", float(sample_variability))
+            writer.write_scalar("metrics/Variability_sd", float(sample_variability_sd))
+            writer.write_scalar("metrics/MELR_weighted", float(melr_weighted))
+            writer.write_scalar("metrics/MELR_weighted_sd", float(melr_weighted_sd))
+            writer.write_scalar("metrics/MELR_unweighted", float(melr_unweighted))
+            writer.write_scalar("metrics/MELR_unweighted_sd", float(melr_unweighted_sd))
+            writer.write_scalar("metrics/Wass1", float(wass1))
+            writer.write_scalar("metrics/Wass1_sd", float(wass1_sd))
+            writer.write_scalar("metrics/KLD", float(kld))
+            writer.write_scalar("metrics/KLD_sd", float(kld_sd))
 
     # Flush/close the writer once
     try:
