@@ -29,15 +29,16 @@ def _single_calculate_constraint_rmse(
     """Relative RMSE for one condition.
 
     Args:
-        predicted_samples: Array `(d, 1)` or `(d,)` predicted at LR after C.
-        condition_reference_samples: Array `(d, 1)` or `(d,)` reference y'.
+        predicted_samples: Array `(N, n_y, d)` predicted at LR for one condition.
+        condition_reference_samples: Array `(n_y, d)` reference y' for one condition.
 
     Returns:
-        Scalar relative RMSE: ||p - r||_2 / ||p||_2 (0 if ||p||_2 == 0).
+        Scalar mean relative RMSE over N samples.
     """
-
-    diff_norm = jnp.linalg.norm(predicted_samples - condition_reference_samples, axis=1)
-    predicted_norm = jnp.linalg.norm(predicted_samples, axis=1)
+    diff_norm = jnp.linalg.norm(
+        predicted_samples - condition_reference_samples[None], axis=(1, 2)
+    )
+    predicted_norm = jnp.linalg.norm(predicted_samples, axis=(1, 2))
     relative_errors = jnp.where(predicted_norm != 0, diff_norm / predicted_norm, 0.0)
     return jnp.mean(relative_errors)
 
@@ -46,26 +47,22 @@ def _single_calculate_constraint_rmse(
 def calculate_constraint_rmse(
     predicted_samples: jnp.ndarray,
     condition_reference_samples: jnp.ndarray,
-    C: jnp.ndarray,
 ) -> float:
-    """Compute constraint RMSE pooled over conditions.
-
-    Applies C to predicted HF samples and compares to provided LR conditions.
+    """Compute constraint RMSE pooled over conditions using direct strided indexing.
 
     Args:
-        predicted_samples: Array `(N, C, d, 1)` of HF predictions.
-        condition_reference_samples: Array `(C, d', 1)` of LR y' per condition.
-        C: Observation matrix with shape `(d', d)`.
+        predicted_samples: Array `(N, C, n_x, d)` of HF predictions.
+        condition_reference_samples: Array `(C, n_y, d)` of LR y' per condition.
 
     Returns:
-        Scalar RMSE averaged over conditions.
+        Scalar RMSE (mean, std) averaged over conditions.
     """
-    x = jnp.squeeze(predicted_samples, -1)
-    C = C.astype(x.dtype)
-    Cx = jnp.einsum("ncd,od->nco", x, C)
-    predicted_samples_red_dim = Cx[..., None]
+    n_x = predicted_samples.shape[2]
+    n_y = condition_reference_samples.shape[1]
+    step = n_x // n_y
+    x_lr = predicted_samples[:, :, ::step, :]  # (N, C, n_y, d)
     vec_c = jax.vmap(_single_calculate_constraint_rmse, in_axes=(1, 0), out_axes=0)(
-        predicted_samples_red_dim, condition_reference_samples
+        x_lr, condition_reference_samples
     )
     return jnp.mean(vec_c), jnp.std(vec_c)
 
