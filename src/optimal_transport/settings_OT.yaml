@@ -28,7 +28,7 @@ beta_schedule:
   end_boundary_value: 100.0
   kl_only_warmup_steps: 0
 lr_schedule:
-  type: "constant"
+  type: "cosine"
   constant_lr: 1e-4
   init_value: 0.0
   peak_value: 1e-4

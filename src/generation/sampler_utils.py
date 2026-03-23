@@ -1,7 +1,6 @@
 """Sampling helpers for unconditional and conditional generation.
 
 This module provides thin wrappers around Swirl-Dynamics samplers to:
-- build the linear observation matrix C' for downsampling,
 - draw unconditional samples,
 - draw WAN-style conditionally guided samples via a post-processed denoiser,
 - draw PDE-guided samples using a learned log h guidance function (NewDriftSdeSampler).
