@@ -80,18 +80,20 @@ class TrueDataModelUnimodal:
       - y'-noise: 4 * Beta(2, 5) - 1.5
     """
 
-    def __init__(self, run_sett: dict):
+    def __init__(self, run_sett: dict, phi: float = 0.5):
         """Initialize the model hyperparameters.
 
         Args:
             run_sett: Dictionary with required fields:
                 - 'N' (int): Number of transition steps to sample.
                 - 'd' (int): Number of spatial dimensions.
+            phi: AR coefficient (default 0.5).
         """
         self.run_sett = run_sett
         run_sett_global = run_sett["global"]
         self.N = run_sett_global["N"]
         self.d = run_sett_global["d"]
+        self.phi = float(phi)
         self.base_means = (
             jnp.linspace(-2, 2, self.d).reshape(self.d, 1).astype(jnp.float32)
         )
@@ -107,15 +109,15 @@ class TrueDataModelUnimodal:
             Array with shape (d, 2), the next [y, y'] state.
 
         Distributional details per dimension i:
-          next_y[i]   = base_means[i] + 0.5 * prev_y[i]   + Normal(0, 0.5^2)
-          next_y'[i]  = base_means[i] + 0.5 * prev_y'[i]  + (4*Beta(2,5)-1.5)
+          next_y[i]   = base_means[i] + phi * prev_y[i]   + Normal(0, 0.5^2)
+          next_y'[i]  = base_means[i] + phi * prev_y'[i]  + (4*Beta(2,5)-1.5)
         """
         k_y, k_yp = jax.random.split(k)
         noise_y = jax.random.normal(k_y, shape=(self.d, 1)) * 0.5
         raw_beta = jax.random.beta(k_yp, a=2.0, b=5.0, shape=(self.d, 1))
         noise_yp = (raw_beta * 4.0) - 1.5
         noise = jnp.concatenate([noise_y, noise_yp], axis=1)
-        return self.base_means + 0.5 * prev_val + noise
+        return self.base_means + self.phi * prev_val + noise
 
     @partial(jax.jit, static_argnums=(0, 2))
     def sample_true_trajectory(self, key, return_latents: bool = False):
@@ -162,7 +164,7 @@ class TrueDataModelUnimodal:
         prev = jnp.concatenate([prev0, y[:, :-1, :, :]], axis=1)
 
         noise = y - (
-            self.base_means[None, None, :, :] + 0.5 * prev
+            self.base_means[None, None, :, :] + self.phi * prev
         )  # (B,N_len,d_prime,1)
         lp = _logpdf_normal(noise, mean=0.0, std=0.5)
         return jnp.sum(lp, axis=(2, 3))  # (B,N_len)
@@ -178,7 +180,7 @@ class TrueDataModelUnimodal:
         prev0 = jnp.zeros((B, 1, d_prime, 1), dtype=jnp.float32)
         prev = jnp.concatenate([prev0, yp[:, :-1, :, :]], axis=1)
 
-        noise = yp - (self.base_means[None, None, :, :] + 0.5 * prev)
+        noise = yp - (self.base_means[None, None, :, :] + self.phi * prev)
         lp = _logpdf_beta_affine(noise, a=2.0, b=5.0, scale=4.0, shift=-1.5)
         return jnp.sum(lp, axis=(2, 3))
 
@@ -635,6 +637,7 @@ class ARTrueDataModel:
         self.x_nsamples = int(run_sett["data_AR"]["x_nsamples"])
         self.n_x = int(run_sett["data_AR"]["n_x"])
         self.n_y = int(run_sett["data_AR"]["n_y"])
+        self.phi = float(run_sett["data_AR"].get("phi", 0.5))
         self.y_factor = int(self.n_x / self.n_y)
         self._load_data()
 
@@ -644,7 +647,7 @@ class ARTrueDataModel:
         sett_ar = copy.deepcopy(self.run_sett)
         sett_ar["global"]["N"] = self.n_x - 1
         sett_ar["global"]["d"] = self.d
-        model = TrueDataModelUnimodal(sett_ar)
+        model = TrueDataModelUnimodal(sett_ar, phi=self.phi)
 
         master_key = jax.random.PRNGKey(self.seed)
         train_key, test_key = jax.random.split(master_key)
