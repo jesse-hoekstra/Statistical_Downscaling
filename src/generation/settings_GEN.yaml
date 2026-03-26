@@ -1,22 +1,29 @@
 global:
   seed: 888
   RNG_NAMESPACE: 20260115
-  generation_type: 'unconditional'
-  mode: 'eval'
-  train_denoiser: True
-  train_pde: False
-  continue_training: False
-  data_file_name: 'data/ks_trajectories_512.h5'
-  n_x: 72
-  n_y: 6
-  d: 2
+  generation_type: 'wan_conditional'
+  mode: 'sample'
+  data_model: 'ar'  
   T: 1
-  training_samples: 600 
   output_dir: 'src/generation/output/'
   time_emb_dim: 16
   chunk_size_sampler: 16
-  hyperparameter_tuning: False
-  debiased_conditioning: True
+  debiased_conditioning: False
+  num_gen_samples: 128 
+  num_conditionings: 512 
+data_KS:
+  data_file_name: 'data/ks_trajectories_512.h5'
+  training_samples: 600
+  n_x: 72
+  n_y: 6
+  d: 2 
+data_AR:
+  y_nsamples: 6000   
+  x_nsamples: 50    
+  test_samples: 20048  
+  n_x: 300          
+  n_y: 5           
+  d: 2 
 train_denoiser:
   batch_size: 32 
   total_train_steps: 50_000 
@@ -32,8 +39,8 @@ train_denoiser:
   clip_min: 1e-3 
 UNET:
   out_channels: 2
-  num_channels: 32,64,128
-  downsample_ratio: 2,2,2
+  num_channels: 32,64 #32,64,128
+  downsample_ratio: 2,2 #2,2,2
   num_blocks: 6
   noise_embed_dim: 128
   use_attention: True
@@ -52,31 +59,6 @@ optimizer:
 exp_tspan:
   num_steps: 256
   end_sigma: 1e-2 #not defined specifically in the paper
-pde_solver:
-  t_low: 1e-3
-  nSim_interior: 1000 
-  nSim_terminal: 1000 
-  x_low: -5.0
-  x_high: 5.0
-  y_low: -5.0
-  y_high: 5.0
-  sampling_stages: 200_000 
-  type_lr_schedule: sirignano 
-  constant_lr: 1e-3
-  boundaries: [25_000, 50_000, 100_000, 150_000]
-  lr_schedules: [1e-3, 5e-4, 1e-4, 5e-5, 1e-5]
-  lambda: 1 
-  num_gen_samples: 128 
-  num_conditionings: 512 
-  chunk_size: 50 # or250
-  adaptive_balancing_loss: False
-  lambda_smooth_alpha: 0.1
-  warmup_steps: 0
-  normalize_data: False
-  save_every_steps: 50_000
-DGM:
-  nodes_per_layer: 512 # or 256
-  num_layers: 6 # or 5
 ema:
   ema_decay: 0.999
   use_ema_eval: True

@@ -24,6 +24,7 @@ There are two variants:
 All sampling routines are JIT-compiled with JAX and operate on PRNG keys.
 """
 
+import copy
 import jax
 import jax.numpy as jnp
 from jax.scipy.special import betaln
@@ -90,7 +91,7 @@ class TrueDataModelUnimodal:
         self.run_sett = run_sett
         run_sett_global = run_sett["global"]
         self.N = run_sett_global["N"]
-        self.d = run_sett["data_KS"]["d"]
+        self.d = run_sett_global["d"]
         self.base_means = (
             jnp.linspace(-2, 2, self.d).reshape(self.d, 1).astype(jnp.float32)
         )
@@ -207,7 +208,7 @@ class TrueDataModelBimodal:
         self.run_sett = run_sett
         run_sett_global = run_sett["global"]
         self.N = run_sett_global["N"]
-        self.d = run_sett["data_KS"]["d"]
+        self.d = run_sett_global["d"]
         self.base_means = (
             jnp.linspace(-0.5, 0.0, self.d).reshape(self.d, 1).astype(jnp.float32)
         )
@@ -354,7 +355,7 @@ class RobustHedgingModel:
         run_sett_global = run_sett["global"]
         run_sett_robust_hedging = run_sett["robust_hedging"]
         self.N = int(run_sett_global["N"])
-        self.d = int(run_sett["data_KS"]["d"])
+        self.d = int(run_sett_global["d"])
         self.dt = float(run_sett_robust_hedging["dt"])
         self._sqrt_dt = jnp.sqrt(jnp.asarray(self.dt, dtype=jnp.float32))
 
@@ -486,8 +487,8 @@ class KSTrueDataModel:
     def __init__(self, run_sett: dict):
         self.run_sett = run_sett
         self.run_sett_data_KS = run_sett["data_KS"]
-        self.d = int(self.run_sett_data_KS["d"])
-        self.N = int(run_sett["global"]["N"])
+        self.d = int(run_sett["data_KS"]["d"])
+        self.training_samples = self.run_sett_data_KS["training_samples"]
         self._load_data()
 
     def _load_data(self) -> None:
@@ -498,21 +499,36 @@ class KSTrueDataModel:
 
         u_LFLR = u_LFLR[:, :, ::2]
 
-        training_samples = self.run_sett["global"]["training_samples"]
-        x_train_eval, _, y_train_eval, y_test = self._get_train_test(
+        x_train_eval, x_test, y_train_eval, y_test = self._get_train_test(
             u_HFHR, u_LFLR, split=48
         )
 
-        x_train_eval = x_train_eval[:training_samples]
+        self.x_train_eval = jnp.asarray(
+            x_train_eval[: self.training_samples], dtype=jnp.float32
+        )
+        x_test_extra = jnp.asarray(
+            x_train_eval[self.training_samples :], dtype=jnp.float32
+        )
+        n_generated = (
+            self.run_sett["global"]["num_gen_samples"]
+            * self.run_sett["global"]["num_conditionings"]
+        )
+        self.x_test = jnp.concatenate(
+            [jnp.asarray(x_test, dtype=jnp.float32), x_test_extra], axis=0
+        )[:n_generated]
+
         n_x, n_y = x_train_eval.shape[1], y_train_eval.shape[1]
         factor = int(n_x / n_y)
         yp_train_eval = x_train_eval[:, ::factor]  # (M, n_y, d)
 
-        # Store as jnp arrays with the trailing singleton expected by the rest
-        # of the codebase: shape (M, N+1, d, 1)
+        # x_train_eval / x_test: (M, n_x, d) — no trailing singleton.
+        # y_test:                (M, n_y, d) — no trailing singleton.
+        # y_train_eval / yp_train_eval: (M, n_y, d, 1) — trailing singleton kept
+        # because sample_true_trajectory returns these to DataNormalizer, which
+        # operates on (*, d, 1) shaped arrays throughout the OT training core.
         self.y_train_eval = jnp.asarray(y_train_eval[..., None], dtype=jnp.float32)
         self.yp_train_eval = jnp.asarray(yp_train_eval[..., None], dtype=jnp.float32)
-        self.y_test = jnp.asarray(y_test[..., None], dtype=jnp.float32)
+        self.y_test = jnp.asarray(y_test, dtype=jnp.float32)
         self._n_train_y = int(self.y_train_eval.shape[0])
         self._n_train_yp = int(self.yp_train_eval.shape[0])
 
@@ -535,7 +551,7 @@ class KSTrueDataModel:
         """
         d = self.d
         n_y = self.run_sett_data_KS["n_y"]
-        n_x = self.run_sett_data_KS["n_x"]  # use the full HFHR time axis
+        n_x = self.run_sett_data_KS["n_x"]
 
         u_HFHR_train_eval, u_HFHR_test = u_HFHR[:-split], u_HFHR[-split:]
         u_LFLR_train_eval, u_LFLR_test = u_LFLR[:-split], u_LFLR[-split:]
@@ -545,25 +561,25 @@ class KSTrueDataModel:
         n_samples_inner_x = int(u_HFHR_train_eval.shape[2] / d)
         n_samples_inner_y = int(u_LFLR_train_eval.shape[2] / d)
 
-        x_samples_train_eval = (
+        x_train_eval = (
             u_HFHR_train_eval[:, :n_x, :]
             .reshape(n_samples_train_eval, n_x, n_samples_inner_x, d)
             .transpose(0, 2, 1, 3)
             .reshape(n_samples_train_eval * n_samples_inner_x, n_x, d)
         )
-        x_samples_test = (
+        x_test = (
             u_HFHR_test[:, :n_x, :]
             .reshape(n_samples_test, n_x, n_samples_inner_x, d)
             .transpose(0, 2, 1, 3)
             .reshape(n_samples_test * n_samples_inner_x, n_x, d)
         )
-        y_samples_train_eval = (
+        y_train_eval = (
             u_LFLR_train_eval[:, :n_y, :]
             .reshape(n_samples_train_eval, n_y, n_samples_inner_y, d)
             .transpose(0, 2, 1, 3)
             .reshape(n_samples_train_eval * n_samples_inner_y, n_y, d)
         )
-        y_samples_test = (
+        y_test = (
             u_LFLR_test[:, :n_y, :]
             .reshape(n_samples_test, n_y, n_samples_inner_y, d)
             .transpose(0, 2, 1, 3)
@@ -571,10 +587,10 @@ class KSTrueDataModel:
         )
 
         return (
-            x_samples_train_eval,
-            x_samples_test,
-            y_samples_train_eval,
-            y_samples_test,
+            x_train_eval,
+            x_test,
+            y_train_eval,
+            y_test,
         )
 
     def sample_true_trajectory(self, key):
@@ -597,12 +613,93 @@ class KSTrueDataModel:
             jnp.take(self.yp_train_eval, idx_yp, axis=0),
         )
 
-    def KS_true_trajectory(self):
+    def true_trajectory(self):
         """Return pre-loaded (y_train, yp_train, y_test) arrays.
 
         Returns:
             y_train:  (M_train, N+1, d, 1)
             yp_train: (M_train, N+1, d, 1)
-            y_test:   (M_test,  N+1, d, 1)
+            y_test:   (M_test,  N+1, d)
+        """
+        return self.y_train_eval, self.yp_train_eval, self.y_test
+
+
+class ARTrueDataModel:
+
+    def __init__(self, run_sett: dict):
+        self.run_sett = run_sett
+        self.seed = run_sett["global"]["seed"]
+        self.d = int(run_sett["data_AR"]["d"])
+        self.test_samples = int(run_sett["data_AR"]["test_samples"])
+        self.y_nsamples = int(run_sett["data_AR"]["y_nsamples"])
+        self.x_nsamples = int(run_sett["data_AR"]["x_nsamples"])
+        self.n_x = int(run_sett["data_AR"]["n_x"])
+        self.n_y = int(run_sett["data_AR"]["n_y"])
+        self.y_factor = int(self.n_x / self.n_y)
+        self._load_data()
+
+    def _load_data(self) -> None:
+        """Load HDF5 file and prepare jnp train/test arrays."""
+
+        sett_ar = copy.deepcopy(self.run_sett)
+        sett_ar["global"]["N"] = self.n_x - 1
+        sett_ar["global"]["d"] = self.d
+        model = TrueDataModelUnimodal(sett_ar)
+
+        master_key = jax.random.PRNGKey(self.seed)
+        train_key, test_key = jax.random.split(master_key)
+        keys = jax.random.split(train_key, self.y_nsamples)
+        keys_test = jax.random.split(test_key, self.test_samples)
+
+        x_train, _ = jax.vmap(model.sample_true_trajectory)(keys)
+        x_train = x_train.squeeze(-1)
+        y_train_eval = x_train[:, :: self.y_factor]
+        x_train_eval = x_train[: self.x_nsamples]
+        yp_train_eval = x_train_eval.reshape(
+            self.x_nsamples, self.n_x // self.y_factor, self.y_factor, self.d
+        ).mean(axis=2)
+
+        x_test, _ = jax.vmap(model.sample_true_trajectory)(keys_test)
+        x_test = x_test.squeeze(-1)
+        y_test = x_test[:, :: self.y_factor]
+
+        self.x_train_eval = jnp.asarray(x_train_eval, dtype=jnp.float32)
+        self.x_test = jnp.asarray(x_test, dtype=jnp.float32)
+        self.y_train_eval = jnp.asarray(y_train_eval[..., None], dtype=jnp.float32)
+        self.yp_train_eval = jnp.asarray(yp_train_eval[..., None], dtype=jnp.float32)
+        self.y_test = jnp.asarray(y_test, dtype=jnp.float32)
+        self._n_train_y = int(self.y_train_eval.shape[0])
+        self._n_train_yp = int(self.yp_train_eval.shape[0])
+
+    def sample_true_trajectory(self, key, return_latents: bool = False):
+        """Sample a single (y, y') pair uniformly from the training set.
+
+        Compatible with ``jax.vmap`` and ``jax.jit``.
+
+        Args:
+            key: JAX PRNG key.
+            return_latents: If True, also return a dummy latent array.
+
+        Returns:
+            y:  shape (N+1, d, 1) — LFLR observation.
+            yp: shape (N+1, d, 1) — temporally-downsampled HFHR field.
+        """
+        key_y, key_yp = jax.random.split(key)
+        idx_y = jax.random.randint(key_y, shape=(), minval=0, maxval=self._n_train_y)
+        idx_yp = jax.random.randint(key_yp, shape=(), minval=0, maxval=self._n_train_yp)
+        y = jnp.take(self.y_train_eval, idx_y, axis=0)
+        yp = jnp.take(self.yp_train_eval, idx_yp, axis=0)
+        if return_latents:
+            lat = jnp.zeros((self.d, 2), dtype=jnp.bool_)
+            return y, yp, lat
+        return y, yp
+
+    def true_trajectory(self):
+        """Return pre-loaded (y_train, yp_train, y_test) arrays.
+
+        Returns:
+            y_train:  (M_train, N+1, d, 1)
+            yp_train: (M_train, N+1, d, 1)
+            y_test:   (M_test,  N+1, d)
         """
         return self.y_train_eval, self.yp_train_eval, self.y_test

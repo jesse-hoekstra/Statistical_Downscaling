@@ -1,16 +1,24 @@
 global:
   seed: 0
-  N: 5  
+  N: 4
   B: 128
-  num_iterations: 100000 
+  num_iterations: 100000
   time_emb_dim: 16
-  RNG_NAMESPACE: 2026000000
-  train_tranform_mode: "train"
-  true_data_model: "ks" 
-data_KS:
   d: 2
+  RNG_NAMESPACE: 2026000000
+  train_tranform_mode: "transform"
+  true_data_model: "unimodal"
+  num_conditionings: 512
+data_AR:
+  y_nsamples: 6000
+  x_nsamples: 300
+  n_x: 300
+  n_y: 5
+  test_samples: 512
+data_KS:
   n_y: 6
   n_x: 72
+  training_samples: 600
   data_file_name: 'data/ks_trajectories_512.h5'
 marginal_flow:
   num_bins: 16
@@ -61,7 +69,7 @@ logging:
   save_every: 50000
 metrics:
   transition_kl_metrics:
-    run_transition_kl: True
+    run_transition_kl: False
     transition_kl_mode: "oracle"
     transition_kl_csv_name: transition_kl_steps.csv
     transition_kl_plot_name: transition_kl_steps

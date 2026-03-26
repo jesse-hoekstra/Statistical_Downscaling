@@ -1,5 +1,4 @@
 import os
-import socket
 import sys
 import jax
 import jax.numpy as jnp
@@ -10,10 +9,37 @@ import yaml
 import argparse
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
-from wandb_integration.wandb_adapter import WandbWriter
-from src.generation.Statistical_Downscaling_PDE_KS import (
-    KSStatisticalDownscalingPDESolver,
-)
+
+try:
+    from wandb_integration.wandb_adapter import WandbWriter
+except ImportError:
+    print("WandbWriter not found, using dummy WandbWriter.")
+
+    class WandbWriter:
+        def __init__(self, base_writer, **kwargs):
+            self.base_writer = base_writer
+            self.active = kwargs.get("active", True)
+
+        def write_scalars(self, step, scalars):
+            if self.active and hasattr(self.base_writer, "write_scalars") and scalars:
+                self.base_writer.write_scalars(step, scalars)
+
+        def write_images(self, images, step=None):
+            if self.active and hasattr(self.base_writer, "write_images"):
+                if step is not None:
+                    self.base_writer.write_images(step, images)
+                else:
+                    self.base_writer.write_images(images)
+
+        def flush(self):
+            if self.active and hasattr(self.base_writer, "flush"):
+                self.base_writer.flush()
+
+        def close(self):
+            if self.active and hasattr(self.base_writer, "close"):
+                self.base_writer.close()
+
+
 from src.generation.denoiser_utils import (
     create_denoiser_model,
     create_diffusion_scheme,
@@ -22,34 +48,36 @@ from src.generation.denoiser_utils import (
     build_trainer,
     run_training,
 )
-from src.generation.utils_metrics import (
-    calculate_constraint_rmse,
-    calculate_sample_variability,
-    calculate_melr_pooled,
-    calculate_kld_pooled,
-    calculate_wass1_pooled,
-)
-from src.optimal_transport.utils_OT import (
-    _w2_1d_sq,
-    _ks_1d,
-    _sliced_wasserstein_w2,
-    _mmd2_rbf_rff,
-    _median_heuristic_sigma,
-)
-from src.generation.data_utils import get_raw_datasets, get_ks_dataset, get_train_test
+from src.generation.utils_metrics import evaluate_all
+from src.generation.data_utils import get_dataset
 from src.generation.sampler_utils import (
     sample_unconditional,
-    sample_pde_guided,
     sample_wan_guided,
 )
 from src.generation.dps_sampler import sample_dps
-from src.generation.hyperparameter_utils import hyperparameter_step
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--config", type=str, default="src/generation/settings_GEN.yaml")
+parser.add_argument(
+    "--config-ot", type=str, default="src/optimal_transport/settings_OT.yaml"
+)
 args = parser.parse_args()
+
 with open(args.config, "r") as f:
     run_sett = yaml.safe_load(f)
+
+run_sett_ot = None
+if args.config_ot:
+    with open(args.config_ot, "r") as f:
+        run_sett_ot = yaml.safe_load(f)
+
+run_sett_global = run_sett["global"]
+run_sett_train_denoiser = run_sett["train_denoiser"]
+run_sett_metrics = run_sett["metrics"]
+run_sett_ema = run_sett["ema"]
+run_sett_optimizer = run_sett["optimizer"]
+run_sett_exp_tspan = run_sett["exp_tspan"]
+seed = run_sett["global"]["seed"]
 
 use_wandb_cfg = bool(run_sett["wandb"]["use_wandb"])
 env_disable = os.environ.get("WANDB_DISABLED", "").strip().lower() in {
@@ -62,11 +90,9 @@ use_wandb = use_wandb_cfg and (not env_disable)
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-hostname = socket.gethostname().split(".")[0]
-
 env_run_name = os.environ.get("WANDB_NAME", "").strip()
 if not env_run_name:
-    env_run_name = f"run_seed{run_sett['global']['seed']}"
+    env_run_name = f"run_seed{seed}"
 
 gpu_tag_env = os.environ.get("GPU_TAG", "").strip()
 if not gpu_tag_env:
@@ -79,42 +105,30 @@ if gpu_tag_env:
 root_work_dir = os.path.join(project_root, "main_GEN")
 work_dir = os.path.join(root_work_dir, env_run_name)
 os.makedirs(work_dir, exist_ok=True)
-run_sett["global"]["work_dir"] = work_dir
+run_sett["work_dir"] = work_dir
 
 writer = None
 key_suffix = ""
 
-run_sett_train_denoiser = run_sett["train_denoiser"]
-run_sett_pde_solver = run_sett["pde_solver"]
-run_sett_global = run_sett["global"]
-run_sett_metrics = run_sett["metrics"]
-run_sett_ema = run_sett["ema"]
-run_sett_optimizer = run_sett["optimizer"]
-run_sett_exp_tspan = run_sett["exp_tspan"]
-
 mode = str(run_sett_global["mode"])
+num_conditionings = int(run_sett_global["num_conditionings"])
+data_model = str(run_sett_global["data_model"]).strip().lower()
+data_sett = run_sett["data_KS" if data_model == "ks" else "data_AR"]
 use_ema_eval = bool(run_sett_ema["use_ema_eval"])
 use_clip_gradient = bool(run_sett_optimizer["use_clip_gradient"])
 clip_gradient = float(run_sett_optimizer["clip_gradient"])
-adaptive_balancing_loss = bool(run_sett_pde_solver["adaptive_balancing_loss"])
-normalize_data = bool(run_sett_pde_solver["normalize_data"])
-num_conditionings = int(run_sett_pde_solver["num_conditionings"])
 seed = int(run_sett_global["seed"])
 RNG_NAMESPACE = int(run_sett_global.get("RNG_NAMESPACE", 0))
 
-MASTER_KEY = jax.random.PRNGKey(seed)
-
-BASE = jax.random.fold_in(MASTER_KEY, int(RNG_NAMESPACE))
+key_master = jax.random.PRNGKey(seed)
+BASE = jax.random.fold_in(key_master, int(RNG_NAMESPACE))
 DENOISER_KEY_BASE = jax.random.fold_in(BASE, 0)
 SAMPLE_KEY_BASE = jax.random.fold_in(BASE, 1)
 EVAL_KEY_BASE = jax.random.fold_in(BASE, 2)
-DATA_KEY_BASE = jax.random.fold_in(BASE, 3)
-PDE_KEY_BASE = jax.random.fold_in(BASE, 4)
 
 if use_wandb:
     base_writer = metric_writers.create_default_writer(work_dir, asynchronous=False)
-
-    project = os.environ.get("WANDB_PROJECT", "generation")
+    project = os.environ.get("WANDB_PROJECT", f"GEN_{mode}")
     entity = os.environ.get("WANDB_ENTITY")
     run_name = os.environ.get("WANDB_NAME", env_run_name)
     if gpu_tag_env and gpu_tag_env not in run_name:
@@ -143,12 +157,6 @@ def _save_samples_h5(path, samples, *, y_bar=None, run_settings=None, rng_key=No
         f.create_dataset("samples", data=arr)
 
 
-def _flatten_data(arr):
-    """Flatten channel dim into batch: (B, n_x, d) -> (B*d, n_x, 1)."""
-    B, n_x, d = arr.shape
-    return arr.transpose(0, 2, 1).reshape(B * d, n_x, 1)
-
-
 def _load_samples_h5(path, *, as_jax=True):
     """Load samples from an HDF5 file and return a JAX array by default."""
     with h5py.File(path, "r") as f:
@@ -157,147 +165,86 @@ def _load_samples_h5(path, *, as_jax=True):
     return jnp.asarray(samples_np) if as_jax else samples_np
 
 
+def _build_true_data_model(run_sett: dict):
+    name = str(run_sett["global"]["data_model"]).strip().lower()
+    from src.optimal_transport.dgp_OT import KSTrueDataModel, ARTrueDataModel
+
+    registry = {"ks": KSTrueDataModel, "ar": ARTrueDataModel}
+    if name not in registry:
+        valid = ", ".join(sorted(registry.keys()))
+        raise ValueError(f"Unknown true_data_model='{name}'. Valid: {valid}")
+    return registry[name](run_sett)
+
+
 def main():
-    if use_ema_eval:
-        print("✓ EMA eval: ON")
-    else:
-        print("EMA eval: OFF")
-    if use_clip_gradient:
-        print(f"✓ Gradient clipping: ON with clip value {clip_gradient}")
-    else:
-        print("Gradient clipping: OFF")
-    if adaptive_balancing_loss:
-        print("✓ Adaptive balancing loss: ON")
-    else:
-        print("Adaptive balancing loss: OFF")
-    if normalize_data:
-        print("✓ Normalize data: ON")
-    else:
-        print("Normalize data: OFF")
-    if mode == "train":
-        print("✓ Running in training mode.")
-    elif mode == "sample":
-        print("✓ Running in sampling mode.")
-    elif mode == "eval":
-        print("✓ Running in evaluation mode.")
-    else:
-        raise ValueError(f"Invalid mode: {mode}")
+    true_data_model = _build_true_data_model(run_sett)
 
-    u_HFHR, u_LFLR, u_HFLR, x, t = get_raw_datasets(
-        file_name=run_sett_global["data_file_name"]
-    )
-    u_LFLR = u_LFLR[:, :, ::2]
-
-    x_samples_train_eval, x_samples_test, y_samples_train_eval, y_samples_test = (
-        get_train_test(u_HFHR, u_LFLR, 48, run_sett_global)
-    )
-
-    DATA_STD = x_samples_train_eval.std()
+    DATA_STD = true_data_model.x_train_eval.std()
 
     if mode == "train":
-        training_samples = run_sett_global["training_sampels"]
-        x_samples_train_eval = x_samples_train_eval[training_samples]
         # Training should be in single precision
         jax.config.update("jax_enable_x64", False)
 
         denoiser_model = create_denoiser_model()
         diffusion_scheme = create_diffusion_scheme(DATA_STD)
 
-        if run_sett_global["train_denoiser"]:
-            batch_size = int(run_sett_train_denoiser["batch_size"])
-            total_train_steps = int(run_sett_train_denoiser["total_train_steps"])
-            metric_aggregation_steps = int(
-                run_sett_train_denoiser["metric_aggregation_steps"]
-            )
-            eval_every_steps = int(run_sett_train_denoiser["eval_every_steps"])
-            num_batches_per_eval = int(run_sett_train_denoiser["num_batches_per_eval"])
-            save_interval_steps = int(run_sett_train_denoiser["save_interval_steps"])
-            max_to_keep = int(run_sett_train_denoiser["max_to_keep"])
+        batch_size = int(run_sett_train_denoiser["batch_size"])
+        total_train_steps = int(run_sett_train_denoiser["total_train_steps"])
+        metric_aggregation_steps = int(
+            run_sett_train_denoiser["metric_aggregation_steps"]
+        )
+        eval_every_steps = int(run_sett_train_denoiser["eval_every_steps"])
+        num_batches_per_eval = int(run_sett_train_denoiser["num_batches_per_eval"])
+        save_interval_steps = int(run_sett_train_denoiser["save_interval_steps"])
+        max_to_keep = int(run_sett_train_denoiser["max_to_keep"])
 
-            model = build_model(denoiser_model, diffusion_scheme, DATA_STD)
-            trainer = build_trainer(model)
+        model = build_model(denoiser_model, diffusion_scheme, DATA_STD)
+        trainer = build_trainer(model)
 
-            denoiser_key_train = jax.random.fold_in(DENOISER_KEY_BASE, 0)
-            denoiser_key_eval = jax.random.fold_in(DENOISER_KEY_BASE, 1)
-            denoiser_seed_train = int(
-                jax.random.randint(
-                    denoiser_key_train,
-                    shape=(),
-                    minval=0,
-                    maxval=2**31 - 1,
-                    dtype=jnp.int32,
-                )
+        denoiser_key_train = jax.random.fold_in(DENOISER_KEY_BASE, 0)
+        denoiser_key_eval = jax.random.fold_in(DENOISER_KEY_BASE, 1)
+        denoiser_seed_train = int(
+            jax.random.randint(
+                denoiser_key_train,
+                shape=(),
+                minval=0,
+                maxval=2**31 - 1,
+                dtype=jnp.int32,
             )
-            denoiser_seed_eval = int(
-                jax.random.randint(
-                    denoiser_key_eval,
-                    shape=(),
-                    minval=0,
-                    maxval=2**31 - 1,
-                    dtype=jnp.int32,
-                )
+        )
+        denoiser_seed_eval = int(
+            jax.random.randint(
+                denoiser_key_eval,
+                shape=(),
+                minval=0,
+                maxval=2**31 - 1,
+                dtype=jnp.int32,
             )
+        )
 
-            run_training(
-                train_dataloader=get_ks_dataset(
-                    x_samples_train_eval,
-                    split="train[:75%]",
-                    batch_size=batch_size,
-                    seed=denoiser_seed_train,
-                ),
-                trainer=trainer,
-                workdir=work_dir,
-                total_train_steps=total_train_steps,
-                metric_writer=writer,
-                metric_aggregation_steps=metric_aggregation_steps,
-                eval_dataloader=get_ks_dataset(
-                    x_samples_train_eval,
-                    split="train[75%:]",
-                    batch_size=batch_size,
-                    seed=denoiser_seed_eval,
-                ),
-                eval_every_steps=eval_every_steps,
-                num_batches_per_eval=num_batches_per_eval,
-                save_interval_steps=save_interval_steps,
-                max_to_keep=max_to_keep,
-            )
-        if run_sett_global["train_pde"]:
-            log_train_metrics_every = int(run_sett_metrics["log_train_metrics_every"])
-            log_ema_metrics_every = int(run_sett_metrics["log_ema_metrics_every"])
-            denoise_fn = restore_denoise_fn(
-                f"{work_dir}/checkpoints_denoise_model", denoiser_model
-            )
-            pde_solver = KSStatisticalDownscalingPDESolver(
-                samples=u_hfhr_samples,
-                settings=run_sett,
-                denoise_fn=denoise_fn,
-                scheme=diffusion_scheme,
-            )
-            pde_params_dir = os.path.join(
-                work_dir, f"checkpoints_pde_solver_{hostname}"
-            )
-            pde_save_every = int(run_sett_pde_solver["save_every_steps"])
-            for it in range(pde_solver.sampling_stages):
-                key_step = jax.random.fold_in(PDE_KEY_BASE, it)
-                train_metrics = pde_solver.update_params(key_step)
-                global_step = int(pde_solver._step)
-                if use_wandb:
-                    scalars = {}
-                    if (global_step % log_train_metrics_every) == 0:
-                        scalars.update(
-                            {f"train/{k}": float(v) for k, v in train_metrics.items()}
-                        )
-                    if use_ema_eval and (global_step % log_ema_metrics_every) == 0:
-                        ema_metrics = pde_solver.compute_ema_metrics(key_step)
-                        scalars.update(
-                            {f"eval/{k}": float(v) for k, v in ema_metrics.items()}
-                        )
-                    if scalars:
-                        writer.write_scalars(step=global_step, scalars=scalars)
-                if global_step % pde_save_every == 0:
-                    pde_solver.save_params(pde_params_dir)
-            if int(pde_solver._step) % pde_save_every != 0:
-                pde_solver.save_params(pde_params_dir)
+        run_training(
+            train_dataloader=get_dataset(
+                true_data_model.x_train_eval,
+                split="train[:75%]",
+                batch_size=batch_size,
+                seed=denoiser_seed_train,
+            ),
+            trainer=trainer,
+            workdir=work_dir,
+            total_train_steps=total_train_steps,
+            metric_writer=writer,
+            metric_aggregation_steps=metric_aggregation_steps,
+            eval_dataloader=get_dataset(
+                true_data_model.x_train_eval,
+                split="train[75%:]",
+                batch_size=batch_size,
+                seed=denoiser_seed_eval,
+            ),
+            eval_every_steps=eval_every_steps,
+            num_batches_per_eval=num_batches_per_eval,
+            save_interval_steps=save_interval_steps,
+            max_to_keep=max_to_keep,
+        )
     elif mode == "sample":
         # Sampling/generation should be in double precision
         jax.config.update("jax_enable_x64", True)
@@ -306,30 +253,34 @@ def main():
         diffusion_scheme = create_diffusion_scheme(DATA_STD)
 
         generation_type = str(run_sett_global["generation_type"])
-        num_gen_samples = int(run_sett_pde_solver["num_gen_samples"])
-        hyperparameter_tuning = bool(run_sett_global["hyperparameter_tuning"])
+        num_gen_samples = int(run_sett_global["num_gen_samples"])
 
         if run_sett_global["debiased_conditioning"]:
-            settings_ot = os.path.join(
-                project_root, "src/optimal_transport/settings_OT.yaml"
-            )
-            with open(settings_ot, "r") as f:
-                run_sett_ot = yaml.safe_load(f)
-            seed = int(run_sett_ot["global"]["seed"])
-            run_name = f"run_seed{seed}"
+            seed_ot = int(run_sett_ot["global"]["seed"])
+            run_name = f"run_seed{seed_ot}"
             saved_dir = os.path.join(project_root, "main_OT", run_name)
-            with h5py.File(saved_dir + "/yp_trajs.h5", "r") as f1:
+            _yp_path = saved_dir + "/yp_trajs.h5"
+            with h5py.File(_yp_path, "r") as f1:
                 y = f1["yp_trajs"][()].squeeze(-1)
+            print(f"Loaded yp_trajs from: {_yp_path}")
         else:
-            y = y_samples_test[:num_conditionings]
+            y = true_data_model.y_test[:num_conditionings]
         denoise_fn = restore_denoise_fn(
             f"{work_dir}/checkpoints_denoise_model", denoiser_model
         )
         key_uncond = jax.random.fold_in(SAMPLE_KEY_BASE, 0)
         key_wan = jax.random.fold_in(SAMPLE_KEY_BASE, 1)
-        key_cond = jax.random.fold_in(SAMPLE_KEY_BASE, 2)
-        key_dps = jax.random.fold_in(SAMPLE_KEY_BASE, 3)
-        sample_file = os.path.join(work_dir, f"samples_{generation_type}.h5")
+        key_dps = jax.random.fold_in(SAMPLE_KEY_BASE, 2)
+        is_conditional = generation_type != "unconditional"
+        if is_conditional:
+            bias_tag = (
+                "debiased" if run_sett_global["debiased_conditioning"] else "biased"
+            )
+            sample_file = os.path.join(
+                work_dir, f"samples_{generation_type}_{bias_tag}.h5"
+            )
+        else:
+            sample_file = os.path.join(work_dir, f"samples_{generation_type}.h5")
         if generation_type == "unconditional":
             samples = sample_unconditional(
                 diffusion_scheme,
@@ -337,69 +288,25 @@ def main():
                 key_uncond,
                 num_samples=num_gen_samples,
                 num_plots=num_conditionings,
+                data_sett=data_sett,
                 run_sett=run_sett,
             )
             print(jnp.mean(samples))
             print(samples.std())
             _save_samples_h5(sample_file, samples)
         elif generation_type == "wan_conditional":
-            if hyperparameter_tuning:
-                alpha_tildes = [0.125, 0.25, 0.5, 1.0, 1.25, 1.5, 1.75, 2.0]
-                steps_N = [32, 64, 128, 256, 512, 1024]
-                melr_results = jnp.zeros((len(alpha_tildes), len(steps_N)))
-                variability_results = jnp.zeros((len(alpha_tildes), len(steps_N)))
-                for i, a_tilde in enumerate(alpha_tildes):
-                    for j, n_steps in enumerate(steps_N):
-                        run_sett["train_denoiser"]["norm_guide_strength"] = float(
-                            a_tilde
-                        )
-                        run_sett["exp_tspan"]["num_steps"] = int(n_steps)
-                        key_ij = jax.random.fold_in(jax.random.fold_in(key_wan, i), j)
-                        melr_unw_val, sam_var_val = hyperparameter_step(
-                            run_sett,
-                            diffusion_scheme,
-                            denoise_fn,
-                            y,
-                            key_ij,
-                            u_hfhr_samples,
-                        )
-                        melr_results = melr_results.at[i, j].set(melr_unw_val)
-                        variability_results = variability_results.at[i, j].set(
-                            sam_var_val
-                        )
-                        print(
-                            f"Alpha tilde: {a_tilde}, Steps: {n_steps}, unweighted MELR: {melr_unw_val}, Variability: {sam_var_val}"
-                        )
-                if use_wandb and writer is not None:
-                    series_labels = [
-                        f"alpha_tilde={a_tilde}" for a_tilde in alpha_tildes
-                    ]
-                    writer.write_line_series(
-                        "hp_tuning_MELR_unweighted/lines",
-                        steps_N,
-                        melr_results,
-                        series_labels=series_labels,
-                        title="MELR (unweighted) vs Steps",
-                    )
-                    writer.write_line_series(
-                        "hp_tuning_Sample_Variability/lines",
-                        steps_N,
-                        variability_results,
-                        series_labels=series_labels,
-                        title="Sample Variability vs Steps",
-                    )
-            else:
-                samples = sample_wan_guided(
-                    diffusion_scheme,
-                    denoise_fn,
-                    y_bar=y,
-                    rng_key=key_wan,
-                    num_samples=num_gen_samples,
-                    run_sett=run_sett,
-                )
-                print(samples.std())
-                print(samples.shape)
-                _save_samples_h5(sample_file, samples)
+            samples = sample_wan_guided(
+                diffusion_scheme,
+                denoise_fn,
+                y_bar=y,
+                rng_key=key_wan,
+                num_samples=num_gen_samples,
+                data_sett=data_sett,
+                run_sett=run_sett,
+            )
+            print(samples.std())
+            print(samples.shape)
+            _save_samples_h5(sample_file, samples)
         elif generation_type == "dps":
             samples = sample_dps(
                 diffusion_scheme,
@@ -412,148 +319,36 @@ def main():
             print(samples.std())
             print(samples.shape)
             _save_samples_h5(sample_file, samples)
-        elif generation_type == "conditional":
-            pde_solver = KSStatisticalDownscalingPDESolver(
-                samples=u_hfhr_samples,
-                settings=run_sett,
-                denoise_fn=denoise_fn,
-                scheme=diffusion_scheme,
-            )
-            pde_params_dir = os.path.join(
-                work_dir, f"checkpoints_pde_solver_{hostname}"
-            )
-            pde_solver.load_params(pde_params_dir)
-            samples = sample_pde_guided(
-                diffusion_scheme,
-                denoise_fn,
-                pde_solver,
-                y=y,
-                rng_key=key_cond,
-                samples_per_condition=num_gen_samples,
-            )
-            print(samples.std())
-            print(samples.shape)
-            _save_samples_h5(sample_file, samples)
     elif mode == "eval":
         # Evaluation/metrics in double precision
         jax.config.update("jax_enable_x64", True)
-        sample_file = os.path.join(
-            work_dir, f"samples_{run_sett_global['generation_type']}.h5"
-        )
-        samples_raw = _load_samples_h5(sample_file, as_jax=True)  # (N, C, n_x, d)
-        samples = _flatten_data(
-            samples_raw.reshape(-1, *samples_raw.shape[-2:])
-        )  # (B, n_x, 1)
-        samples = samples[:, None, :, :]  # (B, 1, n_x, 1) — dummy C dim for metrics
-        x_ref_train = _flatten_data(
-            x_samples_train_eval[x_samples_train_eval.shape[0] // 10 :]
-        )
-        x_ref_test = _flatten_data(x_samples_test)
-        x_ref = jnp.concatenate([x_ref_train, x_ref_test], axis=0)[
-            :65536
-        ]  # (M, n_x, 1)
-
-        settings_ot = os.path.join(
-            project_root, "src/optimal_transport/settings_OT.yaml"
-        )
-        with open(settings_ot, "r") as f:
-            run_sett_ot = yaml.safe_load(f)
-        seed = int(run_sett_ot["global"]["seed"])
-        if run_sett_global["debiased_conditioning"]:
-            run_name = f"run_seed{seed}_cuda0"
-            saved_dir = os.path.join(project_root, "main_OT", run_name)
-            with h5py.File(saved_dir + "/yp_trajs.h5", "r") as f1:
-                y = f1["yp_trajs"][()].squeeze(-1)
-        else:
-            y = y_samples_test[:num_conditionings]
-
-        constraint_rmse, constraint_rmse_sd = calculate_constraint_rmse(
-            samples_raw,
-            y,
-        )
-        gen_flat = np.asarray(samples[:, 0, :, 0])  # (B*d, n_x)
-        ref_flat = np.asarray(x_ref[:, :, 0])  # (M,   n_x)
-        n_x_eval = gen_flat.shape[1]
-
-        # W2_avg and KS_avg: per time-step, then mean ± std over time steps
-        w2_list = [_w2_1d_sq(gen_flat[:, t], ref_flat[:, t]) for t in range(n_x_eval)]
-        ks_list = [_ks_1d(gen_flat[:, t], ref_flat[:, t]) for t in range(n_x_eval)]
-        w2_avg, w2_std = float(np.mean(w2_list)), float(np.std(w2_list))
-        ks_avg, ks_std = float(np.mean(ks_list)), float(np.std(ks_list))
-
-        # SWD: mean ± std over projections
-        swd, _, swd_std = _sliced_wasserstein_w2(
-            gen_flat, ref_flat, num_proj=256, seed=seed
-        )
-
-        # MMD2: mean ± std over 5 random seeds
-        sigma_mmd = _median_heuristic_sigma(
-            gen_flat, ref_flat, seed=seed, max_pairs=4096
-        )
-        mmd2_runs = [
-            _mmd2_rbf_rff(
-                gen_flat, ref_flat, sigma=sigma_mmd, num_features=256, seed=seed + i
+        generation_type = run_sett_global["generation_type"]
+        is_conditional = generation_type != "unconditional"
+        if is_conditional:
+            bias_tag = (
+                "debiased" if run_sett_global["debiased_conditioning"] else "biased"
             )
-            for i in range(5)
-        ]
-        mmd2, mmd2_std = float(np.mean(mmd2_runs)), float(np.std(mmd2_runs))
+            sample_file = os.path.join(
+                work_dir, f"samples_{generation_type}_{bias_tag}.h5"
+            )
+        else:
+            sample_file = os.path.join(work_dir, f"samples_{generation_type}.h5")
+        samples_raw = _load_samples_h5(sample_file, as_jax=True)  # (N, C, n_x, d)
 
-        N, C, nx, d_ch = samples_raw.shape
-        samples_for_var = samples_raw.reshape(N, C, nx * d_ch, 1)
-        sample_variability, sample_variability_sd = calculate_sample_variability(
-            samples_for_var
+        eval_work_dir = os.path.join(
+            work_dir,
+            f"{generation_type}_{bias_tag}" if is_conditional else generation_type,
         )
-
-        melr_weighted, melr_weighted_sd = calculate_melr_pooled(
-            samples,
-            x_ref,
-            sample_shape=(int(run_sett_global["n_x"]),),
-            weighted=True,
-            epsilon=float(run_sett_metrics["epsilon"]),
+        os.makedirs(eval_work_dir, exist_ok=True)
+        run_sett["work_dir"] = eval_work_dir
+        evaluate_all(
+            samples_raw=samples_raw,
+            true_data_model=true_data_model,
+            data_sett=data_sett,
+            run_sett=run_sett,
+            writer=writer,
+            key_suffix=key_suffix,
         )
-        melr_unweighted, melr_unweighted_sd = calculate_melr_pooled(
-            samples,
-            x_ref,
-            sample_shape=(int(run_sett_global["n_x"]),),
-            weighted=False,
-            epsilon=float(run_sett_metrics["epsilon"]),
-        )
-        wass1, wass1_sd = calculate_wass1_pooled(samples, x_ref, num_bins=1000)
-        kld, kld_sd = calculate_kld_pooled(
-            samples, x_ref, epsilon=float(run_sett_metrics["epsilon"])
-        )
-
-        print(f"cRMSE:          {constraint_rmse:.6f} (sd: {constraint_rmse_sd:.6f})")
-        print(f"W2_avg:         {w2_avg:.6f} (sd: {w2_std:.6f})")
-        print(f"KS_avg:         {ks_avg:.6f} (sd: {ks_std:.6f})")
-        print(f"SWD:            {swd:.6f} (sd: {swd_std:.6f})")
-        print(f"MMD2:           {mmd2:.6f} (sd: {mmd2_std:.6f})")
-        print(
-            f"Variability:    {sample_variability:.6f} (sd: {sample_variability_sd:.6f})"
-        )
-        print(f"MELR_weighted:  {melr_weighted:.6f} (sd: {melr_weighted_sd:.6f})")
-        print(f"MELR_unweighted:{melr_unweighted:.6f} (sd: {melr_unweighted_sd:.6f})")
-        print(f"Wass1:          {wass1:.6f} (sd: {wass1_sd:.6f})")
-        print(f"KLD:            {kld:.6f} (sd: {kld_sd:.6f})")
-        if use_wandb:
-            writer.write_scalar("metrics/W2_avg", w2_avg)
-            writer.write_scalar("metrics/W2_avg_sd", w2_std)
-            writer.write_scalar("metrics/KS_avg", ks_avg)
-            writer.write_scalar("metrics/KS_avg_sd", ks_std)
-            writer.write_scalar("metrics/SWD", swd)
-            writer.write_scalar("metrics/SWD_sd", swd_std)
-            writer.write_scalar("metrics/MMD2", mmd2)
-            writer.write_scalar("metrics/MMD2_sd", mmd2_std)
-            writer.write_scalar("metrics/Variability", float(sample_variability))
-            writer.write_scalar("metrics/Variability_sd", float(sample_variability_sd))
-            writer.write_scalar("metrics/MELR_weighted", float(melr_weighted))
-            writer.write_scalar("metrics/MELR_weighted_sd", float(melr_weighted_sd))
-            writer.write_scalar("metrics/MELR_unweighted", float(melr_unweighted))
-            writer.write_scalar("metrics/MELR_unweighted_sd", float(melr_unweighted_sd))
-            writer.write_scalar("metrics/Wass1", float(wass1))
-            writer.write_scalar("metrics/Wass1_sd", float(wass1_sd))
-            writer.write_scalar("metrics/KLD", float(kld))
-            writer.write_scalar("metrics/KLD_sd", float(kld_sd))
 
     # Flush/close the writer once
     try:

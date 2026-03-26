@@ -38,7 +38,7 @@ def get_raw_datasets(file_name, ds_x=4):
     return u_HFHR, u_LFLR, u_HFLR, x, t
 
 
-def get_ks_dataset(
+def get_dataset(
     u_samples: jnp.ndarray, split: str, batch_size: int, seed: Optional[int] = None
 ):
     """Create a deterministic, infinite NumPy iterator of batched KS samples.

@@ -8,19 +8,17 @@ Provided metrics (pooled over samples/conditions where applicable):
 - 1-Wasserstein (per-dimension, histogram-based) averaged over dimensions.
 """
 
+import os
+import h5py
+import yaml
+import numpy as np
+from functools import partial
+from typing import Any, Dict
+
+import jax
 import jax.numpy as jnp
 from jax.scipy.stats import gaussian_kde
 from jax.scipy.integrate import trapezoid
-import jax
-from functools import partial
-import argparse
-import yaml
-
-parser = argparse.ArgumentParser()
-parser.add_argument("--config", type=str, default="src/generation/settings_GEN.yaml")
-args = parser.parse_args()
-with open(args.config, "r") as f:
-    run_sett = yaml.safe_load(f)
 
 
 def _single_calculate_constraint_rmse(
@@ -230,8 +228,8 @@ def _get_energy_spectrum_for_one_sample(
 
 @partial(jax.jit, static_argnames=["sample_shape", "weighted"])
 def calculate_melr_pooled(
-    predicted_samples: jnp.ndarray,  # Shape: (N, C, D, 1) e.g., (10, 2, 192, 1)
-    reference_samples: jnp.ndarray,  # Shape: (M, D, 1) e.g., (163840, 192, 1)
+    predicted_samples: jnp.ndarray,
+    reference_samples: jnp.ndarray,
     sample_shape: tuple,
     weighted: bool,
     epsilon: float = 1e-10,
@@ -257,8 +255,8 @@ def calculate_melr_pooled(
         (num_pooled_samples, num_dimensions, predicted_samples.shape[3]),
     )
 
-    pred_clean = jnp.squeeze(pooled_predicted_samples, axis=-1)  # Shape: (N*C, D)
-    ref_clean = jnp.squeeze(reference_samples, axis=-1)  # Shape: (M, D)
+    pred_clean = jnp.squeeze(pooled_predicted_samples, axis=-1)
+    ref_clean = jnp.squeeze(reference_samples, axis=-1)
 
     k_magnitude, k_bins, counts = _get_k_grids(sample_shape)
 
@@ -337,14 +335,10 @@ def _single_calculate_wass1(
             f"Expected trailing dimension of 1, but got {predicted_samples.shape} and {reference_samples.shape}"
         )
 
-    # Vectorize the 1D calculation over all dimensions (axis=1)
-    # in_axes=(1, 1, None) maps over dimension 'd' for both samples
-    # and passes the static 'num_bins' argument
     wass1_vec = jax.vmap(
         _single_dimension_calculate_wass1, in_axes=(1, 1, None), out_axes=0
     )(predicted_samples, reference_samples, num_bins)
 
-    # Average the Wass1 metric across all dimensions
     mean_wass1 = jnp.mean(wass1_vec)
 
     return mean_wass1, jnp.std(wass1_vec)
@@ -357,7 +351,6 @@ def calculate_wass1_pooled(
     num_bins: int = 1000,
 ) -> float:
     """Wasserstein-1 pooled across samples and conditions (mean over dims)."""
-    # Pool the N (batch) and C (condition) axes
     num_pooled_samples = predicted_samples.shape[0] * predicted_samples.shape[1]
     num_dimensions = predicted_samples.shape[2]
     pooled_predicted_samples = jnp.reshape(
@@ -369,3 +362,229 @@ def calculate_wass1_pooled(
         pooled_predicted_samples, reference_samples, num_bins
     )
     return wass1
+
+
+def _flatten_channels(arr: np.ndarray) -> np.ndarray:
+    """Flatten the channel dimension into the batch dimension.
+
+    (B, n_x, d) -> (B*d, n_x, 1)
+
+    Each spatial channel `d` becomes an independent sample, preserving the
+    spatial structure along `n_x`.
+    """
+    B, n_x, d = arr.shape
+    return arr.transpose(0, 2, 1).reshape(B * d, n_x, 1)
+
+
+def evaluate_all(
+    samples_raw: jnp.ndarray,
+    true_data_model,
+    data_sett: Dict[str, Any],
+    run_sett: Dict[str, Any],
+    writer=None,
+    key_suffix: str = "",
+) -> None:
+    """Full evaluation of generated samples against true test data.
+
+    Mirrors the structure of ``evaluate_all_with_one_batch`` in utils_OT but
+    operates on two distributions — x_gen vs x_true — instead of four.
+
+    Args:
+        samples_raw:      Generated samples, shape ``(N, C, n_x, d)``.
+        true_data_model:  Data-model object with ``x_test`` and ``y_test``.
+        data_sett:        Data-specific settings dict (e.g. ``run_sett["data_KS"]``).
+        run_sett:         Full run-settings dict.
+        writer:           Optional metric writer (e.g. WandbWriter).
+        key_suffix:       String appended to all logged metric keys and file names.
+    """
+    from src.optimal_transport.utils_OT import (
+        _w2_1d_sq,
+        _ks_1d,
+        _sliced_wasserstein_w2,
+        _mmd2_rbf_rff,
+        _median_heuristic_sigma,
+        _adjacent_corr_from_trajs_np,
+        plot_adjacent_corrs,
+        _append_row_csv,
+    )
+
+    run_sett_global = run_sett["global"]
+    run_sett_metrics = run_sett["metrics"]
+    base_dir = run_sett.get("work_dir", os.getcwd())
+    os.makedirs(base_dir, exist_ok=True)
+
+    seed = int(run_sett_global["seed"])
+    num_conditionings = int(run_sett_global["num_conditionings"])
+    generation_type = str(run_sett_global["generation_type"])
+    n_x = int(data_sett["n_x"])
+
+    N, C, _, d = samples_raw.shape
+
+    x_test_arr = np.asarray(true_data_model.x_test)
+
+    if run_sett_global.get("debiased_conditioning", False):
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+        ot_settings_path = os.path.join(
+            project_root, "src/optimal_transport/settings_OT.yaml"
+        )
+        with open(ot_settings_path, "r") as f:
+            run_sett_ot = yaml.safe_load(f)
+        seed_ot = int(run_sett_ot["global"]["seed"])
+        ot_run_name = f"run_seed{seed_ot}"
+        ot_dir = os.path.join(project_root, "main_OT", ot_run_name)
+        _yp_path = os.path.join(ot_dir, "yp_trajs.h5")
+        with h5py.File(_yp_path, "r") as f:
+            y = np.asarray(f["yp_trajs"][()])[..., 0]
+        print(f"Loaded yp_trajs from: {_yp_path}")
+        y = y[:num_conditionings]
+    else:
+        y = np.asarray(true_data_model.y_test)[:num_conditionings]
+
+    samples_nc = np.asarray(samples_raw).reshape(N * C, n_x, d)
+    samples_flat = _flatten_channels(samples_nc)
+    samples_4d = samples_flat[:, np.newaxis, :, :]
+
+    x_ref = _flatten_channels(x_test_arr)
+
+    gen_flat = samples_flat[:, :, 0]
+    ref_flat = x_ref[:, :, 0]
+
+    constraint_rmse, constraint_rmse_sd = calculate_constraint_rmse(
+        jnp.asarray(samples_raw), jnp.asarray(y)
+    )
+
+    samples_for_var = jnp.asarray(samples_raw).reshape(N, C, n_x * d, 1)
+    sample_variability, sample_variability_sd = calculate_sample_variability(
+        samples_for_var
+    )
+
+    w2_list = [_w2_1d_sq(gen_flat[:, t], ref_flat[:, t]) for t in range(n_x)]
+    ks_list = [_ks_1d(gen_flat[:, t], ref_flat[:, t]) for t in range(n_x)]
+    w2_avg, w2_std = float(np.mean(w2_list)), float(np.std(w2_list))
+    ks_avg, ks_std = float(np.mean(ks_list)), float(np.std(ks_list))
+
+    swd_num_proj = int(run_sett_metrics.get("swd_num_proj", 256))
+    swd, _, swd_std = _sliced_wasserstein_w2(
+        gen_flat, ref_flat, num_proj=swd_num_proj, seed=seed
+    )
+
+    mmd_max_pairs = int(run_sett_metrics.get("mmd_max_pairs", 4096))
+    mmd_rff_features = int(run_sett_metrics.get("mmd_rff_features", 256))
+    sigma_mmd = _median_heuristic_sigma(
+        gen_flat, ref_flat, seed=seed, max_pairs=mmd_max_pairs
+    )
+    mmd2_runs = [
+        _mmd2_rbf_rff(
+            gen_flat,
+            ref_flat,
+            sigma=sigma_mmd,
+            num_features=mmd_rff_features,
+            seed=seed + i,
+        )
+        for i in range(5)
+    ]
+    mmd2, mmd2_std = float(np.mean(mmd2_runs)), float(np.std(mmd2_runs))
+
+    epsilon = float(run_sett_metrics.get("epsilon", 1e-5))
+    jnp_samples_4d = jnp.asarray(samples_4d)
+    jnp_x_ref = jnp.asarray(x_ref)
+    melr_weighted, melr_weighted_sd = calculate_melr_pooled(
+        jnp_samples_4d, jnp_x_ref, sample_shape=(n_x,), weighted=True, epsilon=epsilon
+    )
+    melr_unweighted, melr_unweighted_sd = calculate_melr_pooled(
+        jnp_samples_4d, jnp_x_ref, sample_shape=(n_x,), weighted=False, epsilon=epsilon
+    )
+
+    wass1_num_bins = int(run_sett_metrics.get("wass1_num_bins", 1000))
+    wass1, wass1_sd = calculate_wass1_pooled(
+        jnp_samples_4d, jnp_x_ref, num_bins=wass1_num_bins
+    )
+
+    kld, kld_sd = calculate_kld_pooled(jnp_samples_4d, jnp_x_ref, epsilon=epsilon)
+
+    print(
+        f"cRMSE:           {float(constraint_rmse):.6f} (sd: {float(constraint_rmse_sd):.6f})"
+    )
+    print(f"W2_avg:          {w2_avg:.6f} (sd: {w2_std:.6f})")
+    print(f"KS_avg:          {ks_avg:.6f} (sd: {ks_std:.6f})")
+    print(f"SWD:             {swd:.6f} (sd: {swd_std:.6f})")
+    print(f"MMD2:            {mmd2:.6f} (sd: {mmd2_std:.6f})")
+    print(
+        f"Variability:     {float(sample_variability):.6f} (sd: {float(sample_variability_sd):.6f})"
+    )
+    print(
+        f"MELR_weighted:   {float(melr_weighted):.6f} (sd: {float(melr_weighted_sd):.6f})"
+    )
+    print(
+        f"MELR_unweighted: {float(melr_unweighted):.6f} (sd: {float(melr_unweighted_sd):.6f})"
+    )
+    print(f"Wass1:           {float(wass1):.6f} (sd: {float(wass1_sd):.6f})")
+    print(f"KLD:             {float(kld):.6f} (sd: {float(kld_sd):.6f})")
+
+    csv_path = os.path.join(base_dir, f"eval_metrics_{generation_type}{key_suffix}.csv")
+    _append_row_csv(
+        csv_path,
+        {
+            "generation_type": generation_type,
+            "cRMSE": float(constraint_rmse),
+            "cRMSE_sd": float(constraint_rmse_sd),
+            "W2_avg": w2_avg,
+            "W2_avg_sd": w2_std,
+            "KS_avg": ks_avg,
+            "KS_avg_sd": ks_std,
+            "SWD": swd,
+            "SWD_sd": swd_std,
+            "MMD2": mmd2,
+            "MMD2_sd": mmd2_std,
+            "Variability": float(sample_variability),
+            "Variability_sd": float(sample_variability_sd),
+            "MELR_weighted": float(melr_weighted),
+            "MELR_weighted_sd": float(melr_weighted_sd),
+            "MELR_unweighted": float(melr_unweighted),
+            "MELR_unweighted_sd": float(melr_unweighted_sd),
+            "Wass1": float(wass1),
+            "Wass1_sd": float(wass1_sd),
+            "KLD": float(kld),
+            "KLD_sd": float(kld_sd),
+        },
+    )
+    print(f"Metrics CSV saved to: {csv_path}")
+
+    corr_gen = _adjacent_corr_from_trajs_np(samples_nc)
+    corr_ref = _adjacent_corr_from_trajs_np(x_test_arr)
+    plot_path = plot_adjacent_corrs(
+        corr_gen,
+        corr_ref,
+        run_sett=run_sett,
+        writer=writer,
+        first_k=n_x,
+        key_suffix=key_suffix,
+        out_name=f"adjcorr_{generation_type}",
+        x_series=True,
+    )
+    print(f"Adjacent-corr plot saved to: {plot_path}")
+
+    if writer is not None and hasattr(writer, "write_scalars"):
+        scalars = {
+            f"metrics/cRMSE{key_suffix}": float(constraint_rmse),
+            f"metrics/cRMSE_sd{key_suffix}": float(constraint_rmse_sd),
+            f"metrics/W2_avg{key_suffix}": w2_avg,
+            f"metrics/W2_avg_sd{key_suffix}": w2_std,
+            f"metrics/KS_avg{key_suffix}": ks_avg,
+            f"metrics/KS_avg_sd{key_suffix}": ks_std,
+            f"metrics/SWD{key_suffix}": swd,
+            f"metrics/SWD_sd{key_suffix}": swd_std,
+            f"metrics/MMD2{key_suffix}": mmd2,
+            f"metrics/MMD2_sd{key_suffix}": mmd2_std,
+            f"metrics/Variability{key_suffix}": float(sample_variability),
+            f"metrics/Variability_sd{key_suffix}": float(sample_variability_sd),
+            f"metrics/MELR_weighted{key_suffix}": float(melr_weighted),
+            f"metrics/MELR_weighted_sd{key_suffix}": float(melr_weighted_sd),
+            f"metrics/MELR_unweighted{key_suffix}": float(melr_unweighted),
+            f"metrics/MELR_unweighted_sd{key_suffix}": float(melr_unweighted_sd),
+            f"metrics/Wass1{key_suffix}": float(wass1),
+            f"metrics/Wass1_sd{key_suffix}": float(wass1_sd),
+            f"metrics/KLD{key_suffix}": float(kld),
+            f"metrics/KLD_sd{key_suffix}": float(kld_sd),
+        }
+        writer.write_scalars(step=0, scalars=scalars)

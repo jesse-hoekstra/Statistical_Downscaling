@@ -15,6 +15,9 @@ args = parser.parse_args()
 with open(args.config, "r") as f:
     run_sett = yaml.safe_load(f)
 
+data_model = str(run_sett["global"]["data_model"]).strip().lower()
+data_sett = run_sett["data_KS" if data_model == "ks" else "data_AR"]
+
 
 def _as_tuple(value):
     """Accept tuple/list or comma-separated string and return a tuple of ints."""
@@ -113,6 +116,9 @@ def restore_denoise_fn(checkpoint_dir: str, denoiser_model):
     trained_state = dfn.DenoisingModelTrainState.restore_from_orbax_ckpt(
         checkpoint_dir, step=None
     )
+    print(
+        f"Loaded denoiser checkpoint from: {checkpoint_dir} (step {int(trained_state.step)})"
+    )
     return dfn.DenoisingTrainer.inference_fn_from_state_dict(
         trained_state, use_ema=True, denoiser=denoiser_model
     )
@@ -134,7 +140,7 @@ def build_model(denoiser_model, diffusion_scheme, data_std: float):
         dfn.DenoisingModel ready for training.
     """
     return dfn.DenoisingModel(
-        input_shape=(int(run_sett["global"]["n_x"]), int(run_sett["global"]["d"])),
+        input_shape=(int(data_sett["n_x"]), int(data_sett["d"])),
         denoiser=denoiser_model,
         noise_sampling=dfn_lib.time_uniform_sampling(
             diffusion_scheme,

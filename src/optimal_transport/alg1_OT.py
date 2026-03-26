@@ -120,7 +120,7 @@ class ConditionalSplineCouplingFlow(hk.Module):
         super().__init__(name=name)
         self.run_sett_marginal_flow = run_sett["marginal_flow"]
         self.run_sett_global = run_sett["global"]
-        self.d = int(run_sett["data_KS"]["d"])
+        self.d = int(self.run_sett_global["d"])
         self.context_dim = int(context_dim)
         self.num_layers = int(self.run_sett_marginal_flow["num_layers"])
         self.hidden_size = int(self.run_sett_marginal_flow["hidden_size"])
@@ -198,7 +198,7 @@ class RhoNet(hk.Module):
         super().__init__(name=name)
         self.run_sett_global = run_sett["global"]
         self.run_sett_correlation_flow = run_sett["correlation_flow"]
-        self.d = int(run_sett["data_KS"]["d"])
+        self.d = int(self.run_sett_global["d"])
         self.time_emb_dim = int(self.run_sett_global["time_emb_dim"])
         self.hidden_size = int(self.run_sett_correlation_flow["hidden_size"])
         self.rho_max = float(self.run_sett_correlation_flow["rho_max"])
@@ -234,7 +234,7 @@ class NormalizingFlowModel:
         self.run_sett_correlation_flow = run_sett["correlation_flow"]
         self.run_sett_preprocessing = run_sett["preprocessing"]
 
-        self.d = int(run_sett["data_KS"]["d"])
+        self.d = int(self.run_sett_global["d"])
         self.N = int(self.run_sett_global["N"])
         self.N_len = int(self.N + 1)
         self.seed = int(self.run_sett_global["seed"])
@@ -603,7 +603,7 @@ class PolicyGradient:
         self.run_sett_baseline_fitting = run_sett["baseline_fitting"]
         self.run_sett_ema = run_sett["ema"]
 
-        self.d = int(run_sett["data_KS"]["d"])
+        self.d = int(self.run_sett_global["d"])
         self.N = int(self.run_sett_global["N"])
         self.N_len = int(self.N + 1)
         self.B = int(self.run_sett_global["B"])

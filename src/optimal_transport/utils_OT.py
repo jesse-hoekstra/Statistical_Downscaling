@@ -201,7 +201,7 @@ def build_eval_batch(
         chunk_size=chunk_size,
         fold_in_tag=int(fold_in_tag),
         N=int(run_sett_global["N"]),
-        d_prime=int(run_sett["data_KS"]["d"]),
+        d_prime=int(run_sett["global"]["d"]),
     )
 
     return EvalBatch(
@@ -701,41 +701,82 @@ def compute_adjacent_corr_from_batch(
 
 
 def plot_adjacent_corrs(
-    corr_flow,
-    corr_flow_prime,
-    corr_true,
-    corr_true_prime,
+    corr_flow: np.ndarray,
+    corr_true: np.ndarray,
     run_sett: Dict[str, Any],
+    corr_flow_prime: Optional[np.ndarray] = None,
+    corr_true_prime: Optional[np.ndarray] = None,
     writer=None,
     step: Optional[int] = None,
     first_k: int = 10,
     key_suffix: str = "",
     out_name: str = "adjcorr_comparison",
+    x_series: bool = False,
 ) -> str:
+    """Plot adjacent-step correlations for flow vs true trajectories.
+
+    Args:
+        corr_flow:        Flow (or generated) correlation array.
+        corr_true:        True (reference) correlation array.
+        run_sett:         Full run-settings dict.
+        corr_flow_prime:  Flow y'-series correlations; required when ``x_series=False``.
+        corr_true_prime:  True y'-series correlations; required when ``x_series=False``.
+        x_series:         If True, plot two series (gen vs true).
+                          If False, plot four series (y and y' for both).
+    """
+    if not x_series and (corr_flow_prime is None or corr_true_prime is None):
+        raise ValueError(
+            "corr_flow_prime and corr_true_prime must be provided when x_series=False."
+        )
+
     max_k = min(int(first_k), len(corr_flow))
     xs = np.arange(1, max_k + 1)
 
     plt.figure(figsize=(8, 5))
-    plt.plot(
-        xs, corr_flow[:max_k], marker="o", linestyle="-", label="Flow Corr(y_t,y_{t-1})"
-    )
-    plt.plot(
-        xs,
-        corr_flow_prime[:max_k],
-        marker="s",
-        linestyle="--",
-        label="Flow Corr(y'_t,y'_{t-1})",
-    )
-    plt.plot(
-        xs, corr_true[:max_k], marker="o", linestyle="-", label="True Corr(y_t,y_{t-1})"
-    )
-    plt.plot(
-        xs,
-        corr_true_prime[:max_k],
-        marker="s",
-        linestyle="--",
-        label="True Corr(y'_t,y'_{t-1})",
-    )
+    if x_series:
+        plt.plot(
+            xs,
+            corr_flow[:max_k],
+            marker="o",
+            linestyle="-",
+            label="Gen Corr(x_t,x_{t-1})",
+        )
+        plt.plot(
+            xs,
+            corr_true[:max_k],
+            marker="s",
+            linestyle="--",
+            label="True Corr(x_t,x_{t-1})",
+        )
+    else:
+        plt.plot(
+            xs,
+            corr_flow[:max_k],
+            marker="o",
+            linestyle="-",
+            label="Flow Corr(y_t,y_{t-1})",
+        )
+        plt.plot(
+            xs,
+            corr_flow_prime[:max_k],
+            marker="s",
+            linestyle="--",
+            label="Flow Corr(y'_t,y'_{t-1})",
+        )
+        plt.plot(
+            xs,
+            corr_true[:max_k],
+            marker="o",
+            linestyle="-",
+            label="True Corr(y_t,y_{t-1})",
+        )
+        plt.plot(
+            xs,
+            corr_true_prime[:max_k],
+            marker="s",
+            linestyle="--",
+            label="True Corr(y'_t,y'_{t-1})",
+        )
     plt.xlabel("t (corr between t and t-1)")
     plt.ylabel("Correlation")
     plt.grid(True, linestyle="--", alpha=0.5)
@@ -770,7 +811,7 @@ def plot_hist_from_batch(
     num_bins: int = 50,
 ) -> str:
     run_sett_global = run_sett["global"]
-    d_prime = int(run_sett["data_KS"]["d"])
+    d_prime = int(run_sett_global["d"])
     ty = batch.true_y[:, t, :, 0]
     fy = batch.flow_y[:, t, :, 0]
     typ = batch.true_yp[:, t, :, 0]
@@ -1020,10 +1061,10 @@ def evaluate_all_with_one_batch(
     )
     plot_adjacent_corrs(
         corr_flow,
-        corr_flow_p,
         corr_true,
-        corr_true_p,
         run_sett=run_sett,
+        corr_flow_prime=corr_flow_p,
+        corr_true_prime=corr_true_p,
         writer=writer,
         step=step,
         first_k=int(run_sett_metrics["adj_corr_metrics"]["adjcorr_first_k"]),

@@ -53,10 +53,11 @@ with open(args.config, "r") as f:
     run_sett = yaml.safe_load(f)
 
 run_sett_global = run_sett["global"]
+run_sett_logging = run_sett["logging"]
+run_sett_beta = run_sett["beta_schedule"]
 seed = int(run_sett_global["seed"])
 
-USE_WANDB_DEFAULT = True
-use_wandb_cfg = bool(run_sett.get("use_wandb", USE_WANDB_DEFAULT))
+use_wandb_cfg = bool(run_sett["wandb"]["use_wandb"])
 env_disable = os.environ.get("WANDB_DISABLED", "").strip().lower() in {
     "1",
     "true",
@@ -118,6 +119,7 @@ def _build_true_data_model(run_sett: dict):
         TrueDataModelBimodal,
         RobustHedgingModel,
         KSTrueDataModel,
+        ARTrueDataModel,
     )
 
     registry = {
@@ -125,6 +127,7 @@ def _build_true_data_model(run_sett: dict):
         "bimodal": TrueDataModelBimodal,
         "robust_hedging": RobustHedgingModel,
         "ks": KSTrueDataModel,
+        "ar": ARTrueDataModel,
     }
     if name not in registry:
         valid = ", ".join(sorted(registry.keys()))
@@ -140,9 +143,6 @@ def main():
     )
     print(f"Using true_data_model: {run_sett['global']['true_data_model']}")
 
-    run_sett_global = run_sett["global"]
-    run_sett_logging = run_sett["logging"]
-    run_sett_beta = run_sett["beta_schedule"]
     N = int(run_sett_global["N"])
     train_transform_mode = str(run_sett_global["train_tranform_mode"])
     num_iterations = int(run_sett_global["num_iterations"])
@@ -226,11 +226,8 @@ def main():
             print(f"Warning: saving PolicyGradient state failed: {e}")
 
     if train_transform_mode == "transform":
-        _, _, y_samples_test = true_data_model.KS_true_trajectory()
-        settings_gen = os.path.join(project_root, "src/generation/settings_GEN.yaml")
-        with open(settings_gen, "r") as f:
-            run_sett_gen = yaml.safe_load(f)
-        num_conditionings = int(run_sett_gen["pde_solver"]["num_conditionings"])
+        _, _, y_samples_test = true_data_model.true_trajectory()
+        num_conditionings = int(run_sett["global"]["num_conditionings"])
         y_trajs = y_samples_test[:num_conditionings]
         try:
             ckpt_dir = os.path.join(work_dir, "checkpoints_policy_gradient")

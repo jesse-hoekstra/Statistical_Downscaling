@@ -21,6 +21,7 @@ def sample_unconditional(
     rng_key: jax.Array,
     num_samples: int,
     num_plots: int,
+    data_sett,
     run_sett,
 ):
     """Generate unconditional samples using an SDE sampler. num_plots is equal to the number of conditions in the conditional samplers.
@@ -36,7 +37,7 @@ def sample_unconditional(
         Array of generated samples with shape `(num_samples, num_plots, d, 1)`.
     """
     sampler = dfn_lib.SdeSampler(
-        input_shape=(run_sett["global"]["n_x"], run_sett["global"]["d"]),
+        input_shape=(data_sett["n_x"], data_sett["d"]),
         integrator=solver_lib.EulerMaruyama(),
         tspan=dfn_lib.exponential_noise_decay(
             diffusion_scheme,
@@ -66,6 +67,7 @@ def sample_wan_guided(
     y_bar: jnp.ndarray,
     rng_key: jax.Array,
     num_samples: int,
+    data_sett,
     run_sett,
 ):
     """Generate WAN-style conditionally guided samples.
@@ -86,7 +88,7 @@ def sample_wan_guided(
     Returns:
         Array with shape `(num_samples, num_conditions, d, 1)`.
     """
-    downsampling_factor = int(run_sett["global"]["n_x"] // run_sett["global"]["n_y"])
+    downsampling_factor = int(data_sett["n_x"] // data_sett["n_y"])
 
     if (
         False
@@ -103,7 +105,7 @@ def sample_wan_guided(
         )
 
     sampler = dfn_lib.SdeSampler(
-        input_shape=(run_sett["global"]["n_x"], run_sett["global"]["d"]),
+        input_shape=(data_sett["n_x"], data_sett["d"]),
         integrator=solver_lib.EulerMaruyama(),
         tspan=dfn_lib.exponential_noise_decay(
             diffusion_scheme,
