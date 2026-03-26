@@ -11,7 +11,9 @@ import jax.numpy as jnp
 from swirl_dynamics.lib import diffusion as dfn_lib
 from swirl_dynamics.lib import solvers as solver_lib
 
-from src.generation.swirl_dynamics_new_guidance.guidance import LinearConstraint
+from src.generation.swirl_dynamics_new_guidance.averaging_guidance import (
+    InfillFromBlockAverages,
+)
 from src.generation.swirl_dynamics_new_sampler.samplers import NewDriftSdeSampler
 
 
@@ -89,20 +91,21 @@ def sample_wan_guided(
         Array with shape `(num_samples, num_conditions, d, 1)`.
     """
     downsampling_factor = int(data_sett["n_x"] // data_sett["n_y"])
+    downsampling_type = str(data_sett["downsampling_type"])
+    guide_strength = run_sett["train_denoiser"]["norm_guide_strength"]
 
-    if (
-        False
-    ):  # Use the LinearConstraint guidance transform, own code, delete in next update
-        guidance_transform = LinearConstraint.create(
-            C_prime=C_prime,
-            y_bar=y_bar,
-            norm_guide_strength=run_sett["train_denoiser"]["norm_guide_strength"],
+    if downsampling_type == "average":
+        guidance_transform = InfillFromBlockAverages(
+            downsampling_factor=downsampling_factor,
+            guide_strength=guide_strength,
         )
-    else:  # Use the InfillFromSlices guidance transform, swirl_dynamics code
+        guidance_inputs = {"observed_averages": y_bar}
+    else:
         guidance_transform = dfn_lib.InfillFromSlices(
             slices=(slice(None), slice(None, None, downsampling_factor), slice(None)),
-            guide_strength=run_sett["train_denoiser"]["norm_guide_strength"],
+            guide_strength=guide_strength,
         )
+        guidance_inputs = {"observed_slices": y_bar}
 
     sampler = dfn_lib.SdeSampler(
         input_shape=(data_sett["n_x"], data_sett["d"]),
@@ -120,7 +123,6 @@ def sample_wan_guided(
     )
 
     keys = jax.random.split(rng_key, num_samples)
-    guidance_inputs = {"observed_slices": y_bar}
     generate_one = jax.jit(
         lambda k: sampler.generate(
             rng=k, guidance_inputs=guidance_inputs, num_samples=int(y_bar.shape[0])
