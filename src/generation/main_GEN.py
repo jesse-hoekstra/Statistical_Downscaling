@@ -261,7 +261,7 @@ def main():
             saved_dir = os.path.join(project_root, "main_OT", run_name)
             _yp_path = saved_dir + "/yp_trajs.h5"
             with h5py.File(_yp_path, "r") as f1:
-                y = f1["yp_trajs"][()].squeeze(-1)
+                y = f1["yp_trajs"][()]
             print(f"Loaded yp_trajs from: {_yp_path}")
         else:
             y = true_data_model.y_test[:num_conditionings]
