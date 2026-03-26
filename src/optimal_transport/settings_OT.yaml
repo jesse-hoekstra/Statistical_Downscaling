@@ -15,6 +15,7 @@ data_AR:
   n_x: 300
   n_y: 5
   test_samples: 512
+  phi: 0.5
 data_KS:
   n_y: 6
   n_x: 72
