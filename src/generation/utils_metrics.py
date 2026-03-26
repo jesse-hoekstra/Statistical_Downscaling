@@ -41,24 +41,29 @@ def _single_calculate_constraint_rmse(
     return jnp.mean(relative_errors)
 
 
-@jax.jit
 def calculate_constraint_rmse(
     predicted_samples: jnp.ndarray,
     condition_reference_samples: jnp.ndarray,
+    downsampling_type: str = "select",
 ) -> float:
-    """Compute constraint RMSE pooled over conditions using direct strided indexing.
+    """Compute constraint RMSE pooled over conditions.
 
     Args:
         predicted_samples: Array `(N, C, n_x, d)` of HF predictions.
         condition_reference_samples: Array `(C, n_y, d)` of LR y' per condition.
+        downsampling_type: `"select"` (every k-th point, KS) or `"average"`
+            (block mean, AR).
 
     Returns:
         Scalar RMSE (mean, std) averaged over conditions.
     """
-    n_x = predicted_samples.shape[2]
+    N, C, n_x, d = predicted_samples.shape
     n_y = condition_reference_samples.shape[1]
     step = n_x // n_y
-    x_lr = predicted_samples[:, :, ::step, :]  # (N, C, n_y, d)
+    if downsampling_type == "average":
+        x_lr = predicted_samples.reshape(N, C, n_y, step, d).mean(axis=3)
+    else:
+        x_lr = predicted_samples[:, :, ::step, :]
     vec_c = jax.vmap(_single_calculate_constraint_rmse, in_axes=(1, 0), out_axes=0)(
         x_lr, condition_reference_samples
     )
@@ -434,7 +439,7 @@ def evaluate_all(
         ot_dir = os.path.join(project_root, "main_OT", ot_run_name)
         _yp_path = os.path.join(ot_dir, "yp_trajs.h5")
         with h5py.File(_yp_path, "r") as f:
-            y = np.asarray(f["yp_trajs"][()])[..., 0]
+            y = np.asarray(f["yp_trajs"][()])
         print(f"Loaded yp_trajs from: {_yp_path}")
         y = y[:num_conditionings]
     else:
@@ -450,7 +455,9 @@ def evaluate_all(
     ref_flat = x_ref[:, :, 0]
 
     constraint_rmse, constraint_rmse_sd = calculate_constraint_rmse(
-        jnp.asarray(samples_raw), jnp.asarray(y)
+        jnp.asarray(samples_raw),
+        jnp.asarray(y),
+        downsampling_type=str(data_sett.get("downsampling_type", "select")),
     )
 
     samples_for_var = jnp.asarray(samples_raw).reshape(N, C, n_x * d, 1)
