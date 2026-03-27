@@ -381,7 +381,7 @@ def _flatten_channels(arr: np.ndarray) -> np.ndarray:
     return arr.transpose(0, 2, 1).reshape(B * d, n_x, 1)
 
 
-def evaluate_all(
+def evaluate_sample(
     samples_raw: jnp.ndarray,
     true_data_model,
     data_sett: Dict[str, Any],
@@ -419,7 +419,7 @@ def evaluate_all(
     os.makedirs(base_dir, exist_ok=True)
 
     seed = int(run_sett_global["seed"])
-    num_conditionings = int(run_sett_global["num_conditionings"])
+    num_conditionings = int(data_sett["num_conditionings"])
     generation_type = str(run_sett_global["generation_type"])
     n_x = int(data_sett["n_x"])
 
@@ -560,9 +560,9 @@ def evaluate_all(
     corr_gen = _adjacent_corr_from_trajs_np(samples_nc)
     corr_ref = _adjacent_corr_from_trajs_np(x_test_arr)
     plot_path = plot_adjacent_corrs(
-        corr_gen,
-        corr_ref,
         run_sett=run_sett,
+        corr_flow=corr_gen,
+        corr_true=corr_ref,
         writer=writer,
         first_k=n_x,
         key_suffix=key_suffix,
@@ -571,27 +571,304 @@ def evaluate_all(
     )
     print(f"Adjacent-corr plot saved to: {plot_path}")
 
+    metrics_dict = {
+        "cRMSE": float(constraint_rmse),
+        "cRMSE_sd": float(constraint_rmse_sd),
+        "W2_avg": w2_avg,
+        "W2_avg_sd": w2_std,
+        "KS_avg": ks_avg,
+        "KS_avg_sd": ks_std,
+        "SWD": swd,
+        "SWD_sd": swd_std,
+        "MMD2": mmd2,
+        "MMD2_sd": mmd2_std,
+        "Variability": float(sample_variability),
+        "Variability_sd": float(sample_variability_sd),
+        "MELR_weighted": float(melr_weighted),
+        "MELR_weighted_sd": float(melr_weighted_sd),
+        "MELR_unweighted": float(melr_unweighted),
+        "MELR_unweighted_sd": float(melr_unweighted_sd),
+        "Wass1": float(wass1),
+        "Wass1_sd": float(wass1_sd),
+        "KLD": float(kld),
+        "KLD_sd": float(kld_sd),
+    }
+
     if writer is not None and hasattr(writer, "write_scalars"):
-        scalars = {
-            f"metrics/cRMSE{key_suffix}": float(constraint_rmse),
-            f"metrics/cRMSE_sd{key_suffix}": float(constraint_rmse_sd),
-            f"metrics/W2_avg{key_suffix}": w2_avg,
-            f"metrics/W2_avg_sd{key_suffix}": w2_std,
-            f"metrics/KS_avg{key_suffix}": ks_avg,
-            f"metrics/KS_avg_sd{key_suffix}": ks_std,
-            f"metrics/SWD{key_suffix}": swd,
-            f"metrics/SWD_sd{key_suffix}": swd_std,
-            f"metrics/MMD2{key_suffix}": mmd2,
-            f"metrics/MMD2_sd{key_suffix}": mmd2_std,
-            f"metrics/Variability{key_suffix}": float(sample_variability),
-            f"metrics/Variability_sd{key_suffix}": float(sample_variability_sd),
-            f"metrics/MELR_weighted{key_suffix}": float(melr_weighted),
-            f"metrics/MELR_weighted_sd{key_suffix}": float(melr_weighted_sd),
-            f"metrics/MELR_unweighted{key_suffix}": float(melr_unweighted),
-            f"metrics/MELR_unweighted_sd{key_suffix}": float(melr_unweighted_sd),
-            f"metrics/Wass1{key_suffix}": float(wass1),
-            f"metrics/Wass1_sd{key_suffix}": float(wass1_sd),
-            f"metrics/KLD{key_suffix}": float(kld),
-            f"metrics/KLD_sd{key_suffix}": float(kld_sd),
-        }
+        scalars = {f"metrics/{k}{key_suffix}": v for k, v in metrics_dict.items()}
         writer.write_scalars(step=0, scalars=scalars)
+
+    return corr_gen, metrics_dict
+
+
+def evaluate_all_samples(
+    work_dir: str,
+    true_data_model,
+    data_sett: Dict[str, Any],
+    run_sett: Dict[str, Any],
+    writer=None,
+    key_suffix: str = "",
+) -> None:
+    """Evaluate all generation types and produce a combined CSV and comparison plot.
+
+    Expects h5 files in ``work_dir``:
+      - ``samples_unconditional.h5``
+      - ``samples_wan_conditional_biased.h5``
+      - ``samples_wan_conditional_debiased.h5``
+
+    Writes a combined CSV to ``work_dir/eval_all/eval_metrics_all.csv`` and a
+    multi-series adjacent-correlation plot to ``work_dir/eval_all/adjcorr/``.
+    """
+    import copy
+
+    from src.optimal_transport.utils_OT import (
+        plot_adjacent_corrs,
+        _append_row_csv,
+    )
+
+    n_x = int(data_sett["n_x"])
+    combined_dir = os.path.join(work_dir, "eval_all")
+    os.makedirs(combined_dir, exist_ok=True)
+
+    corr_flows = {}
+
+    configs = [
+        ("unconditional", False, None),
+        ("wan_conditional", False, "biased"),
+        ("wan_conditional", True, "debiased"),
+    ]
+
+    all_rows = []
+    samples_dict = {}
+
+    for gen_type, debiased, bias_tag in configs:
+        if gen_type == "unconditional":
+            h5_name = "samples_unconditional.h5"
+            label = "unconditional"
+            eval_subdir = os.path.join(work_dir, "unconditional")
+        else:
+            h5_name = f"samples_{gen_type}_{bias_tag}.h5"
+            label = f"{gen_type}_{bias_tag}"
+            eval_subdir = os.path.join(work_dir, label)
+
+        h5_path = os.path.join(work_dir, h5_name)
+        if not os.path.exists(h5_path):
+            print(f"[WARN] h5 not found, skipping: {h5_path}")
+            continue
+
+        print(f"\n{'='*60}")
+        print(f"Evaluating: {label}")
+        print(f"{'='*60}")
+
+        with h5py.File(h5_path, "r") as f:
+            samples_raw = jnp.asarray(f["samples"][()])
+
+        patched = copy.deepcopy(run_sett)
+        patched["global"]["generation_type"] = gen_type
+        patched["global"]["debiased_conditioning"] = debiased
+        os.makedirs(eval_subdir, exist_ok=True)
+        patched["work_dir"] = eval_subdir
+
+        corr_gen, metrics = evaluate_sample(
+            samples_raw=samples_raw,
+            true_data_model=true_data_model,
+            data_sett=data_sett,
+            run_sett=patched,
+            writer=writer,
+            key_suffix=key_suffix,
+        )
+        corr_flows[label] = corr_gen
+        all_rows.append({"generation_type": label, **metrics})
+        samples_dict[label] = samples_raw
+
+    if not all_rows:
+        print("[WARN] No sample files found; nothing to write.")
+        return
+
+    combined_csv = os.path.join(combined_dir, f"eval_metrics_all{key_suffix}.csv")
+    for row in all_rows:
+        _append_row_csv(combined_csv, row)
+    print(f"\nCombined metrics CSV saved to: {combined_csv}")
+
+    patched_plot = copy.deepcopy(run_sett)
+    patched_plot["work_dir"] = combined_dir
+    display_labels = ["uDfn", "cDfn", "OT+cDfn"]
+    plot_path = plot_adjacent_corrs(
+        run_sett=patched_plot,
+        corr_flows=corr_flows,
+        writer=writer,
+        first_k=n_x,
+        key_suffix=key_suffix,
+        out_name="adjcorr_all",
+        compare_all_x=True,
+        labels=display_labels,
+    )
+    print(f"Combined adjacent-corr plot saved to: {plot_path}")
+
+    density_paths = plot_marginal_densities(
+        samples_dict=samples_dict,
+        run_sett=patched_plot,
+        data_sett=data_sett,
+        x_test=np.asarray(true_data_model.x_test),
+        writer=writer,
+        key_suffix=key_suffix,
+        out_name="marginal_densities",
+        labels=display_labels,
+    )
+    for p in density_paths:
+        print(f"Marginal density plot saved to: {p}")
+
+
+def plot_marginal_densities(
+    samples_dict: Dict[str, np.ndarray],
+    run_sett: Dict[str, Any],
+    data_sett: Dict[str, Any],
+    x_test: np.ndarray = None,
+    writer=None,
+    key_suffix: str = "",
+    out_name: str = "marginal_densities",
+    positions: list = None,
+    labels: list = None,
+) -> list:
+    """Marginal density plots at selected spatial positions vs. ground truth.
+
+    For each channel d, produces a figure with one subplot per position.  Each
+    subplot shows one histogram per generation type plus a ground-truth reference:
+
+    - ``data_model == "ar"``: closed-form Gaussian AR(1) marginal.
+    - Otherwise: empirical marginal of ``x_test`` (kernel-density estimate).
+
+    The AR(1) marginal starting from Y_0 ~ N(mu_i, sigma^2):
+      E[Y_n]   = mu_i * (1 - phi^{n+1}) / (1 - phi)
+      Var[Y_n] = sigma^2 * (1 - phi^{2(n+1)}) / (1 - phi^2)
+    with channel mean  mu_i = -2 + 4 * i / (d - 1)  (0-indexed channel i).
+
+    Args:
+        samples_dict: Mapping label -> array of shape ``(N, C, n_x, d)``.
+        run_sett:     Full run-settings dict.
+        data_sett:    Data-specific settings dict.
+        x_test:       Test data array of shape ``(N, n_x, d)`` or ``(N, C, n_x, d)``;
+                      used as empirical ground truth for non-AR models.
+        writer:       Optional metric writer.
+        key_suffix:   String appended to output file names.
+        out_name:     Base name for output files.
+        positions:    Spatial indices to plot; defaults to ``[0, 100, 200, n_x-1]``.
+
+    Returns:
+        List of saved file paths, one per channel.
+    """
+    import matplotlib.pyplot as plt
+
+    data_model = str(run_sett["global"]["data_model"]).strip().lower()
+
+    # Flatten each entry to (N*C, n_x, d)
+    flat = {
+        label: np.asarray(arr).reshape(-1, *np.asarray(arr).shape[2:])
+        for label, arr in samples_dict.items()
+    }
+
+    first = next(iter(flat.values()))
+    n_x, d = first.shape[1], first.shape[2]
+
+    if positions is None:
+        positions = [100, 150, 200]
+    positions = [min(p, n_x - 1) for p in positions]
+
+    # AR-only: precompute closed-form marginal helpers
+    if data_model == "ar":
+        phi = float(run_sett["data_AR"]["phi"])
+        sigma = 0.5  # N(0, 0.5^2) innovations
+        channel_means = np.linspace(-2.0, 2.0, d)
+
+        def _channel_mean(i):
+            return float(channel_means[i])
+
+        def _gt_mean_at_n(mu_i, n):
+            if abs(phi - 1.0) < 1e-8:
+                return mu_i * (n + 1)
+            return mu_i * (1.0 - phi ** (n + 1)) / (1.0 - phi)
+
+        def _gt_std_at_n(n):
+            if abs(phi**2 - 1.0) < 1e-8:
+                return sigma * np.sqrt(float(n + 1))
+            return sigma * np.sqrt((1.0 - phi ** (2 * (n + 1))) / (1.0 - phi**2))
+
+    # Non-AR: flatten x_test to (N_total, n_x, d)
+    if data_model != "ar":
+        if x_test is None:
+            raise ValueError("x_test must be provided for non-AR data models")
+        x_test_flat = np.asarray(x_test).reshape(-1, *np.asarray(x_test).shape[-2:])
+
+    colors = ["steelblue", "darkorange", "crimson"]
+    if labels is None:
+        labels = list(flat.keys())
+
+    base_dir = run_sett.get("work_dir", os.getcwd())
+    out_dir = os.path.join(base_dir, "marginal_densities")
+    os.makedirs(out_dir, exist_ok=True)
+    out_paths = []
+
+    for dim in range(d):
+        n_pos = len(positions)
+        _, axes = plt.subplots(1, n_pos, figsize=(4 * n_pos, 4), sharey=False)
+        if n_pos == 1:
+            axes = [axes]
+
+        for ax, p in zip(axes, positions):
+            for (_, samples), color, label in zip(flat.items(), colors, labels):
+                ax.hist(
+                    samples[:, p, dim],
+                    bins=60,
+                    density=True,
+                    color=color,
+                    alpha=0.4,
+                    label=label,
+                )
+
+            if data_model == "ar":
+                mu_i = _channel_mean(dim)
+                gt_mu = _gt_mean_at_n(mu_i, p)
+                gt_sigma = _gt_std_at_n(p)
+                x_range = np.linspace(
+                    gt_mu - 4.5 * gt_sigma, gt_mu + 4.5 * gt_sigma, 300
+                )
+                gt_pdf = np.exp(-0.5 * ((x_range - gt_mu) / gt_sigma) ** 2) / (
+                    gt_sigma * np.sqrt(2 * np.pi)
+                )
+                ax.plot(
+                    x_range,
+                    gt_pdf,
+                    color="forestgreen",
+                    linestyle="--",
+                    linewidth=2,
+                    label="Ground truth",
+                )
+            else:
+                gt_vals = x_test_flat[:, p, dim]
+                counts, bin_edges = np.histogram(gt_vals, bins=60, density=True)
+                bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+                ax.plot(
+                    bin_centers,
+                    counts,
+                    color="forestgreen",
+                    linestyle="--",
+                    linewidth=2,
+                    label="Empirical",
+                )
+
+            ax.set_xlabel(f"$x_{{{p},{dim+1}}}$")
+            ax.set_ylabel("Density")
+            ax.legend(fontsize=7)
+            ax.grid(True, linestyle="--", alpha=0.4)
+        plt.tight_layout()
+
+        out_path = os.path.join(out_dir, f"{out_name}_d{dim + 1}{key_suffix}.png")
+        plt.savefig(out_path, dpi=150, bbox_inches="tight")
+        plt.close()
+        print(f"Marginal density plot saved to: {out_path}")
+        out_paths.append(out_path)
+
+        if writer is not None and hasattr(writer, "write_images"):
+            writer.write_images(images={f"{out_name}_d{dim + 1}{key_suffix}": out_path})
+
+    return out_paths
