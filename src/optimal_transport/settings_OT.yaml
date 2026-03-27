@@ -8,7 +8,6 @@ global:
   RNG_NAMESPACE: 2026000000
   train_tranform_mode: "train"
   true_data_model: "ar"
-  num_conditionings: 6000
 data_AR:
   y_nsamples: 6000
   x_nsamples: 300
@@ -17,12 +16,14 @@ data_AR:
   d: 2
   test_samples: 20000
   phi: 0.99
+  num_conditionings: 6000
 data_KS:
   n_y: 6
   n_x: 72
   d: 2
   training_samples: 600
   data_file_name: 'data/ks_trajectories_512.h5'
+  num_conditionings: 512
 marginal_flow:
   num_bins: 16
   num_layers: 8
