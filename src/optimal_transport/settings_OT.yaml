@@ -15,7 +15,7 @@ data_AR:
   n_y: 15
   d: 2
   test_samples: 20000
-  phi: 0.7
+  phi: 0.8
   num_conditionings: 6000
 data_KS:
   n_y: 6
