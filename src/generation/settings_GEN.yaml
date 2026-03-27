@@ -2,8 +2,8 @@ global:
   seed: 888
   RNG_NAMESPACE: 20260115
   generation_type: 'wan_conditional'
-  mode: 'eval_all'
-  data_model: 'ks'  
+  mode: 'train'
+  data_model: 'ar'  
   T: 1
   output_dir: 'src/generation/output/'
   time_emb_dim: 16
@@ -23,10 +23,10 @@ data_AR:
   x_nsamples: 300
   test_samples: 20000
   n_x: 300
-  n_y: 5
+  n_y: 15
   d: 2
   downsampling_type: 'average'
-  phi: 0.99
+  phi: 0.8
   num_gen_samples: 10
   num_conditionings: 6000
 train_denoiser:
@@ -68,7 +68,7 @@ ema:
   ema_decay: 0.999
   use_ema_eval: True
 wandb:
-  use_wandb: False
+  use_wandb: True
 metrics: 
   log_ema_metrics_every: 500
   log_train_metrics_every: 50

@@ -442,6 +442,8 @@ def evaluate_sample(
             y = np.asarray(f["yp_trajs"][()])
         print(f"Loaded yp_trajs from: {_yp_path}")
         y = y[:num_conditionings]
+        if y.ndim == 4 and y.shape[-1] == 1:
+            y = y[..., 0]  # (C, n_y, d, 1) -> (C, n_y, d)
     else:
         y = np.asarray(true_data_model.y_test)[:num_conditionings]
 
@@ -622,6 +624,7 @@ def evaluate_all_samples(
     import copy
 
     from src.optimal_transport.utils_OT import (
+        _adjacent_corr_from_trajs_np,
         plot_adjacent_corrs,
         _append_row_csv,
     )
@@ -693,9 +696,11 @@ def evaluate_all_samples(
     patched_plot = copy.deepcopy(run_sett)
     patched_plot["work_dir"] = combined_dir
     display_labels = ["uDfn", "cDfn", "OT+cDfn"]
+    corr_test = _adjacent_corr_from_trajs_np(np.asarray(true_data_model.x_test))
     plot_path = plot_adjacent_corrs(
         run_sett=patched_plot,
         corr_flows=corr_flows,
+        corr_test=corr_test,
         writer=writer,
         first_k=n_x,
         key_suffix=key_suffix,
@@ -771,7 +776,7 @@ def plot_marginal_densities(
     n_x, d = first.shape[1], first.shape[2]
 
     if positions is None:
-        positions = [100, 150, 200]
+        positions = [18, 36, 54] if data_model == "ks" else [100, 150, 200]
     positions = [min(p, n_x - 1) for p in positions]
 
     # AR-only: precompute closed-form marginal helpers
