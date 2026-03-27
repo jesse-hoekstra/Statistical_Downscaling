@@ -512,8 +512,8 @@ class KSTrueDataModel:
             x_train_eval[self.training_samples :], dtype=jnp.float32
         )
         n_generated = (
-            self.run_sett["global"]["num_gen_samples"]
-            * self.run_sett["global"]["num_conditionings"]
+            self.run_sett_data_KS["num_gen_samples"]
+            * self.run_sett_data_KS["num_conditionings"]
         )
         self.x_test = jnp.concatenate(
             [jnp.asarray(x_test, dtype=jnp.float32), x_test_extra], axis=0

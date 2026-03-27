@@ -227,7 +227,9 @@ def main():
 
     if train_transform_mode == "transform":
         _, _, y_samples_test = true_data_model.true_trajectory()
-        num_conditionings = int(run_sett["global"]["num_conditionings"])
+        _data_model = str(run_sett_global["true_data_model"]).strip().lower()
+        _data_sett_key = {"ks": "data_KS", "ar": "data_AR"}.get(_data_model)
+        num_conditionings = int(run_sett[_data_sett_key]["num_conditionings"])
         y_trajs = y_samples_test[:num_conditionings]
         try:
             ckpt_dir = os.path.join(work_dir, "checkpoints_policy_gradient")
