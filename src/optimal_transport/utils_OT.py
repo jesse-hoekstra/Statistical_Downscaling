@@ -701,9 +701,10 @@ def compute_adjacent_corr_from_batch(
 
 
 def plot_adjacent_corrs(
-    corr_flow: np.ndarray,
-    corr_true: np.ndarray,
     run_sett: Dict[str, Any],
+    corr_flows: Dict[str, Any] = None,
+    corr_flow: np.ndarray = None,
+    corr_true: np.ndarray = None,
     corr_flow_prime: Optional[np.ndarray] = None,
     corr_true_prime: Optional[np.ndarray] = None,
     writer=None,
@@ -712,6 +713,8 @@ def plot_adjacent_corrs(
     key_suffix: str = "",
     out_name: str = "adjcorr_comparison",
     x_series: bool = False,
+    compare_all_x: bool = False,
+    labels: list = None,
 ) -> str:
     """Plot adjacent-step correlations for flow vs true trajectories.
 
@@ -724,30 +727,76 @@ def plot_adjacent_corrs(
         x_series:         If True, plot two series (gen vs true).
                           If False, plot four series (y and y' for both).
     """
-    if not x_series and (corr_flow_prime is None or corr_true_prime is None):
+    if (
+        not x_series
+        and not compare_all_x
+        and (corr_flow_prime is None or corr_true_prime is None)
+    ):
         raise ValueError(
-            "corr_flow_prime and corr_true_prime must be provided when x_series=False."
+            "corr_flow_prime and corr_true_prime must be provided when x_series=False and compare_all_x=False."
         )
 
-    max_k = min(int(first_k), len(corr_flow))
+    if compare_all_x:
+        ref_arr = next(iter(corr_flows.values()))
+    else:
+        ref_arr = corr_flow
+    max_k = min(int(first_k), len(ref_arr))
     xs = np.arange(1, max_k + 1)
+
+    plot_idx = np.concatenate([[1], np.arange(30, max_k, 30)])
 
     plt.figure(figsize=(8, 5))
     if x_series:
         plt.plot(
-            xs,
-            corr_flow[:max_k],
+            xs[plot_idx],
+            corr_flow[plot_idx],
             marker="o",
             linestyle="-",
-            label="Gen Corr(x_t,x_{t-1})",
+            label="Generated (x)",
         )
         plt.plot(
-            xs,
-            corr_true[:max_k],
+            xs[plot_idx],
+            corr_true[plot_idx],
             marker="s",
             linestyle="--",
-            label="True Corr(x_t,x_{t-1})",
+            label="True data model (x)",
         )
+        if run_sett["global"]["data_model"] == "ar":
+            phi = run_sett["data_AR"]["phi"]
+            ns = xs[plot_idx]
+            rho_theory = phi * np.sqrt(
+                (1 - phi ** (2 * ns)) / (1 - phi ** (2 * (ns + 1)))
+            )
+            plt.plot(
+                ns,
+                rho_theory,
+                marker="^",
+                linestyle=":",
+                label=r"Ground truth",
+            )
+    elif compare_all_x:
+        _labels = labels if labels is not None else list(corr_flows.keys())
+        for (_, arr), label in zip(corr_flows.items(), _labels):
+            plt.plot(
+                xs[plot_idx],
+                arr[plot_idx],
+                marker="o",
+                linestyle="-",
+                label=label,
+            )
+        if run_sett["global"]["data_model"] == "ar":
+            phi = run_sett["data_AR"]["phi"]
+            ns = xs[plot_idx]
+            rho_theory = phi * np.sqrt(
+                (1 - phi ** (2 * ns)) / (1 - phi ** (2 * (ns + 1)))
+            )
+            plt.plot(
+                ns,
+                rho_theory,
+                marker="^",
+                linestyle=":",
+                label=r"Ground truth",
+            )
     else:
         plt.plot(
             xs,
@@ -777,8 +826,8 @@ def plot_adjacent_corrs(
             linestyle="--",
             label="True Corr(y'_t,y'_{t-1})",
         )
-    plt.xlabel("t (corr between t and t-1)")
-    plt.ylabel("Correlation")
+    plt.xlabel("n")
+    plt.ylabel("Adjacent-step correlation")
     plt.grid(True, linestyle="--", alpha=0.5)
     plt.legend()
     plt.tight_layout()
