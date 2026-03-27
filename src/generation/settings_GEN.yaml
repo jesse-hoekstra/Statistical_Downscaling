@@ -1,16 +1,14 @@
 global:
   seed: 888
   RNG_NAMESPACE: 20260115
-  generation_type: 'unconditional'
-  mode: 'train'
-  data_model: 'ar'  
+  generation_type: 'wan_conditional'
+  mode: 'eval_all'
+  data_model: 'ks'  
   T: 1
   output_dir: 'src/generation/output/'
   time_emb_dim: 16
-  chunk_size_sampler: 16
+  chunk_size_sampler: 50
   debiased_conditioning: True
-  num_gen_samples: 10
-  num_conditionings: 6000 
 data_KS:
   data_file_name: 'data/ks_trajectories_512.h5'
   training_samples: 600
@@ -18,6 +16,8 @@ data_KS:
   n_y: 6
   d: 2
   downsampling_type: 'select'
+  num_gen_samples: 128
+  num_conditionings: 512
 data_AR:
   y_nsamples: 6000
   x_nsamples: 300
@@ -27,6 +27,8 @@ data_AR:
   d: 2
   downsampling_type: 'average'
   phi: 0.99
+  num_gen_samples: 10
+  num_conditionings: 6000
 train_denoiser:
   batch_size: 32 
   total_train_steps: 50_000 

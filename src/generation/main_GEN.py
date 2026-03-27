@@ -48,7 +48,7 @@ from src.generation.denoiser_utils import (
     build_trainer,
     run_training,
 )
-from src.generation.utils_metrics import evaluate_all
+from src.generation.utils_metrics import evaluate_sample, evaluate_all_samples
 from src.generation.data_utils import get_dataset
 from src.generation.sampler_utils import (
     sample_unconditional,
@@ -111,9 +111,9 @@ writer = None
 key_suffix = ""
 
 mode = str(run_sett_global["mode"])
-num_conditionings = int(run_sett_global["num_conditionings"])
 data_model = str(run_sett_global["data_model"]).strip().lower()
 data_sett = run_sett["data_KS" if data_model == "ks" else "data_AR"]
+num_conditionings = int(data_sett["num_conditionings"])
 use_ema_eval = bool(run_sett_ema["use_ema_eval"])
 use_clip_gradient = bool(run_sett_optimizer["use_clip_gradient"])
 clip_gradient = float(run_sett_optimizer["clip_gradient"])
@@ -253,7 +253,7 @@ def main():
         diffusion_scheme = create_diffusion_scheme(DATA_STD)
 
         generation_type = str(run_sett_global["generation_type"])
-        num_gen_samples = int(run_sett_global["num_gen_samples"])
+        num_gen_samples = int(data_sett["num_gen_samples"])
 
         if run_sett_global["debiased_conditioning"]:
             seed_ot = int(run_sett_ot["global"]["seed"])
@@ -333,7 +333,7 @@ def main():
             )
         else:
             sample_file = os.path.join(work_dir, f"samples_{generation_type}.h5")
-        samples_raw = _load_samples_h5(sample_file, as_jax=True)  # (N, C, n_x, d)
+        samples_raw = _load_samples_h5(sample_file, as_jax=True)
 
         eval_work_dir = os.path.join(
             work_dir,
@@ -341,8 +341,19 @@ def main():
         )
         os.makedirs(eval_work_dir, exist_ok=True)
         run_sett["work_dir"] = eval_work_dir
-        evaluate_all(
+        evaluate_sample(
             samples_raw=samples_raw,
+            true_data_model=true_data_model,
+            data_sett=data_sett,
+            run_sett=run_sett,
+            writer=writer,
+            key_suffix=key_suffix,
+        )
+    elif mode == "eval_all":
+        # Evaluate all generation types together in double precision
+        jax.config.update("jax_enable_x64", True)
+        evaluate_all_samples(
+            work_dir=work_dir,
             true_data_model=true_data_model,
             data_sett=data_sett,
             run_sett=run_sett,
