@@ -1,6 +1,6 @@
 global:
   seed: 0
-  N: 4
+  N: 14
   d: 2
   B: 128
   num_iterations: 100000
