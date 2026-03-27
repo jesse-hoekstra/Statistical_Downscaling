@@ -678,6 +678,7 @@ class PolicyGradient:
         peak_value = float(self.run_sett_lr["peak_value"])
         warmup_steps = int(self.run_sett_lr["warmup_steps"])
         decay_steps = int(self.run_sett_lr["decay_steps"])
+        constant_value = float(self.run_sett_lr["constant_lr"])
         end_value = float(self.run_sett_lr["end_value"])
         step_decay_boundaries = self.run_sett_lr["step_decay_boundaries"]
         step_decay_factor = float(self.run_sett_lr["step_decay_factor"])
@@ -688,7 +689,7 @@ class PolicyGradient:
             transition_steps=max(warmup_steps, 1),
         )
         if mode_type == "constant":
-            return optax.constant_schedule(end_value)
+            return optax.constant_schedule(constant_value)
         elif mode_type == "cosine":
             tail = optax.cosine_decay_schedule(
                 init_value=peak_value,
