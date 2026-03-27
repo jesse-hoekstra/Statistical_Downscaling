@@ -707,6 +707,7 @@ def plot_adjacent_corrs(
     corr_true: np.ndarray = None,
     corr_flow_prime: Optional[np.ndarray] = None,
     corr_true_prime: Optional[np.ndarray] = None,
+    corr_test: Optional[np.ndarray] = None,
     writer=None,
     step: Optional[int] = None,
     first_k: int = 10,
@@ -743,7 +744,15 @@ def plot_adjacent_corrs(
     max_k = min(int(first_k), len(ref_arr))
     xs = np.arange(1, max_k + 1)
 
-    plot_idx = np.concatenate([[1], np.arange(30, max_k, 30)])
+    _g = run_sett["global"]
+    data_model = (
+        str(_g.get("data_model") or _g.get("true_data_model", "ar")).strip().lower()
+    )
+    plot_idx = (
+        np.concatenate([[1], np.arange(30, max_k, 30)])
+        if data_model == "ar"
+        else np.concatenate([[1], np.arange(10, max_k, 20)])
+    )
 
     plt.figure(figsize=(8, 5))
     if x_series:
@@ -761,7 +770,7 @@ def plot_adjacent_corrs(
             linestyle="--",
             label="True data model (x)",
         )
-        if run_sett["global"]["data_model"] == "ar":
+        if data_model == "ar":
             phi = run_sett["data_AR"]["phi"]
             ns = xs[plot_idx]
             rho_theory = phi * np.sqrt(
@@ -773,6 +782,14 @@ def plot_adjacent_corrs(
                 marker="^",
                 linestyle=":",
                 label=r"Ground truth",
+            )
+        elif corr_test is not None:
+            plt.plot(
+                xs[plot_idx],
+                corr_test[plot_idx],
+                marker="^",
+                linestyle=":",
+                label="Test data",
             )
     elif compare_all_x:
         _labels = labels if labels is not None else list(corr_flows.keys())
@@ -784,7 +801,7 @@ def plot_adjacent_corrs(
                 linestyle="-",
                 label=label,
             )
-        if run_sett["global"]["data_model"] == "ar":
+        if data_model == "ar":
             phi = run_sett["data_AR"]["phi"]
             ns = xs[plot_idx]
             rho_theory = phi * np.sqrt(
@@ -796,6 +813,14 @@ def plot_adjacent_corrs(
                 marker="^",
                 linestyle=":",
                 label=r"Ground truth",
+            )
+        elif corr_test is not None:
+            plt.plot(
+                xs[plot_idx],
+                corr_test[plot_idx],
+                marker="^",
+                linestyle=":",
+                label="Empirical",
             )
     else:
         plt.plot(

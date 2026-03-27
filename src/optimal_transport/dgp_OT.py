@@ -523,11 +523,6 @@ class KSTrueDataModel:
         factor = int(n_x / n_y)
         yp_train_eval = x_train_eval[:, ::factor]  # (M, n_y, d)
 
-        # x_train_eval / x_test: (M, n_x, d) — no trailing singleton.
-        # y_test:                (M, n_y, d) — no trailing singleton.
-        # y_train_eval / yp_train_eval: (M, n_y, d, 1) — trailing singleton kept
-        # because sample_true_trajectory returns these to DataNormalizer, which
-        # operates on (*, d, 1) shaped arrays throughout the OT training core.
         self.y_train_eval = jnp.asarray(y_train_eval[..., None], dtype=jnp.float32)
         self.yp_train_eval = jnp.asarray(yp_train_eval[..., None], dtype=jnp.float32)
         self.y_test = jnp.asarray(y_test, dtype=jnp.float32)
