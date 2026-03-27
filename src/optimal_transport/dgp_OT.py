@@ -651,10 +651,10 @@ class ARTrueDataModel:
 
         master_key = jax.random.PRNGKey(self.seed)
         train_key, test_key = jax.random.split(master_key)
-        keys = jax.random.split(train_key, self.y_nsamples)
+        keys_train = jax.random.split(train_key, self.y_nsamples)
         keys_test = jax.random.split(test_key, self.test_samples)
 
-        x_train, _ = jax.vmap(model.sample_true_trajectory)(keys)
+        x_train, _ = jax.vmap(model.sample_true_trajectory)(keys_train)
         x_train = x_train.squeeze(-1)
         y_train_eval = x_train[:, :: self.y_factor]
         x_train_eval = x_train[: self.x_nsamples]
