@@ -1134,9 +1134,9 @@ def evaluate_all_with_one_batch(
         batch
     )
     plot_adjacent_corrs(
-        corr_flow,
-        corr_true,
-        run_sett=run_sett,
+        run_sett,
+        corr_flow=corr_flow,
+        corr_true=corr_true,
         corr_flow_prime=corr_flow_p,
         corr_true_prime=corr_true_p,
         writer=writer,
