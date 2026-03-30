@@ -134,8 +134,8 @@ Samples are written to `main_GEN/<run_name>/samples_<generation_type>.h5`.
 
 | `generation_type` | Description |
 |---|---|
-| `unconditional` | Draw from the learned prior |
-| `wan_conditional` | Constraint-aware guidance |
+| `unconditional` | Solely dependent on the learned prior |
+| `wan_conditional` | Projecting the constraint space, correcting the unconstraint space. |
 
 #### Evaluate
 
