@@ -4,7 +4,6 @@ global:
   generation_type: 'wan_conditional'
   mode: 'train'
   data_model: 'ar'  
-  T: 1
   output_dir: 'src/generation/output/'
   time_emb_dim: 16
   chunk_size_sampler: 50
@@ -26,7 +25,7 @@ data_AR:
   n_y: 15
   d: 2
   downsampling_type: 'average'
-  phi: 0.8
+  phi: 0.9
   num_gen_samples: 10
   num_conditionings: 6000
 train_denoiser:
@@ -34,7 +33,7 @@ train_denoiser:
   total_train_steps: 50_000 
   eval_every_steps: 100 
   metric_aggregation_steps: 100 
-  save_interval_steps: 25_000 
+  save_interval_steps: 50_000 
   num_batches_per_eval: 10 
   max_to_keep: 10
   beta_min: 0.1
@@ -63,7 +62,7 @@ optimizer:
   use_clip_gradient: False
 exp_tspan:
   num_steps: 256
-  end_sigma: 1e-2 #not defined specifically in the paper
+  end_sigma: 1e-2 
 ema:
   ema_decay: 0.999
   use_ema_eval: True
