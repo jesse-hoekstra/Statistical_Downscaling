@@ -61,10 +61,22 @@ parser.add_argument("--config", type=str, default="src/generation/settings_GEN.y
 parser.add_argument(
     "--config-ot", type=str, default="src/optimal_transport/settings_OT.yaml"
 )
+parser.add_argument(
+    "--run-id",
+    type=str,
+    default="",
+    help="Suffix appended to work_dir to distinguish parallel runs.",
+)
+parser.add_argument(
+    "--seed", type=int, default=None, help="Override the seed in the config."
+)
 args = parser.parse_args()
 
 with open(args.config, "r") as f:
     run_sett = yaml.safe_load(f)
+
+if args.seed is not None:
+    run_sett["global"]["seed"] = args.seed
 
 run_sett_ot = None
 if args.config_ot:
@@ -103,7 +115,8 @@ if gpu_tag_env:
     env_run_name = f"{env_run_name}_{gpu_tag_env}"
 
 root_work_dir = os.path.join(project_root, "main_GEN")
-work_dir = os.path.join(root_work_dir, env_run_name)
+run_id_suffix = f"_{args.run_id}" if args.run_id else ""
+work_dir = os.path.join(root_work_dir, f"{env_run_name}{run_id_suffix}")
 os.makedirs(work_dir, exist_ok=True)
 run_sett["work_dir"] = work_dir
 
@@ -185,8 +198,8 @@ def main():
         # Training should be in single precision
         jax.config.update("jax_enable_x64", False)
 
-        denoiser_model = create_denoiser_model()
-        diffusion_scheme = create_diffusion_scheme(DATA_STD)
+        denoiser_model = create_denoiser_model(run_sett)
+        diffusion_scheme = create_diffusion_scheme(DATA_STD, run_sett)
 
         batch_size = int(run_sett_train_denoiser["batch_size"])
         total_train_steps = int(run_sett_train_denoiser["total_train_steps"])
@@ -198,8 +211,10 @@ def main():
         save_interval_steps = int(run_sett_train_denoiser["save_interval_steps"])
         max_to_keep = int(run_sett_train_denoiser["max_to_keep"])
 
-        model = build_model(denoiser_model, diffusion_scheme, DATA_STD)
-        trainer = build_trainer(model)
+        model = build_model(
+            denoiser_model, diffusion_scheme, DATA_STD, data_sett, run_sett
+        )
+        trainer = build_trainer(model, run_sett)
 
         denoiser_key_train = jax.random.fold_in(DENOISER_KEY_BASE, 0)
         denoiser_key_eval = jax.random.fold_in(DENOISER_KEY_BASE, 1)
@@ -249,8 +264,8 @@ def main():
         # Sampling/generation should be in double precision
         jax.config.update("jax_enable_x64", True)
 
-        denoiser_model = create_denoiser_model()
-        diffusion_scheme = create_diffusion_scheme(DATA_STD)
+        denoiser_model = create_denoiser_model(run_sett)
+        diffusion_scheme = create_diffusion_scheme(DATA_STD, run_sett)
 
         generation_type = str(run_sett_global["generation_type"])
         num_gen_samples = int(data_sett["num_gen_samples"])
@@ -265,9 +280,7 @@ def main():
             print(f"Loaded yp_trajs from: {_yp_path}")
         else:
             y = true_data_model.y_test[:num_conditionings]
-        denoise_fn = restore_denoise_fn(
-            f"{work_dir}/checkpoints_denoise_model", denoiser_model
-        )
+        denoise_fn = restore_denoise_fn(f"{work_dir}/checkpoints", denoiser_model)
         key_uncond = jax.random.fold_in(SAMPLE_KEY_BASE, 0)
         key_wan = jax.random.fold_in(SAMPLE_KEY_BASE, 1)
         key_dps = jax.random.fold_in(SAMPLE_KEY_BASE, 2)
@@ -277,10 +290,12 @@ def main():
                 "debiased" if run_sett_global["debiased_conditioning"] else "biased"
             )
             sample_file = os.path.join(
-                work_dir, f"samples_{generation_type}_{bias_tag}.h5"
+                work_dir, f"samples_{generation_type}_{bias_tag}{run_id_suffix}.h5"
             )
         else:
-            sample_file = os.path.join(work_dir, f"samples_{generation_type}.h5")
+            sample_file = os.path.join(
+                work_dir, f"samples_{generation_type}{run_id_suffix}.h5"
+            )
         if generation_type == "unconditional":
             samples = sample_unconditional(
                 diffusion_scheme,
@@ -329,10 +344,12 @@ def main():
                 "debiased" if run_sett_global["debiased_conditioning"] else "biased"
             )
             sample_file = os.path.join(
-                work_dir, f"samples_{generation_type}_{bias_tag}.h5"
+                work_dir, f"samples_{generation_type}_{bias_tag}{run_id_suffix}.h5"
             )
         else:
-            sample_file = os.path.join(work_dir, f"samples_{generation_type}.h5")
+            sample_file = os.path.join(
+                work_dir, f"samples_{generation_type}{run_id_suffix}.h5"
+            )
         samples_raw = _load_samples_h5(sample_file, as_jax=True)
 
         eval_work_dir = os.path.join(
@@ -359,6 +376,7 @@ def main():
             run_sett=run_sett,
             writer=writer,
             key_suffix=key_suffix,
+            run_id_suffix=run_id_suffix,
         )
 
     # Flush/close the writer once
