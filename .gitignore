@@ -18,4 +18,6 @@ data/
 logs/
 main_GEN/
 main_OT/
-Ohter/
+Other/
+.Rhistory
+aggregate_metrics.py
