@@ -331,7 +331,7 @@ def _sliced_wasserstein_w2(
     Y: np.ndarray,
     num_proj: int = 128,
     seed: int = 0,
-) -> Tuple[float, float, float]:
+) -> Tuple[float, float]:
     """
     Sliced Wasserstein (W2) between empirical distributions in R^P.
     For each random unit direction theta:
@@ -367,11 +367,9 @@ def _sliced_wasserstein_w2(
     projY.sort(axis=0)
 
     per_proj_swd2 = np.mean((projX - projY) ** 2, axis=0)  # (K,)
-    per_proj_swd = np.sqrt(np.maximum(per_proj_swd2, 0.0))  # (K,)
     swd2 = float(np.mean(per_proj_swd2))
     swd = float(np.sqrt(max(swd2, 0.0)))
-    swd_std = float(np.std(per_proj_swd))
-    return swd, swd2, swd_std
+    return swd, swd2
 
 
 def compute_traj_dist_metrics_from_batch(
@@ -436,9 +434,7 @@ def compute_traj_dist_metrics_from_batch(
     )
 
     num_proj = int(run_sett_metrics["swd"]["swd_num_proj"])
-    swd, swd2, _ = _sliced_wasserstein_w2(
-        X_true, X_flow, num_proj=num_proj, seed=swd_seed
-    )
+    swd, swd2 = _sliced_wasserstein_w2(X_true, X_flow, num_proj=num_proj, seed=swd_seed)
 
     out = {
         "eval/traj/B_used": float(B),
