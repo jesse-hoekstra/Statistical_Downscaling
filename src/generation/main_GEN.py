@@ -54,7 +54,6 @@ from src.generation.sampler_utils import (
     sample_unconditional,
     sample_wan_guided,
 )
-from src.generation.dps_sampler import sample_dps
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--config", type=str, default="src/generation/settings_GEN.yaml")
@@ -136,8 +135,7 @@ RNG_NAMESPACE = int(run_sett_global.get("RNG_NAMESPACE", 0))
 key_master = jax.random.PRNGKey(seed)
 BASE = jax.random.fold_in(key_master, int(RNG_NAMESPACE))
 DENOISER_KEY_BASE = jax.random.fold_in(BASE, 0)
-SAMPLE_KEY_BASE = jax.random.fold_in(BASE, 1)
-EVAL_KEY_BASE = jax.random.fold_in(BASE, 2)
+SAMPLE_KEY_BASE = jax.random.PRNGKey(888)
 
 if use_wandb:
     base_writer = metric_writers.create_default_writer(work_dir, asynchronous=False)
