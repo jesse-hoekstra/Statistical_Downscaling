@@ -193,7 +193,6 @@ def main():
     DATA_STD = true_data_model.x_train_eval.std()
 
     if mode == "train":
-        # Training should be in single precision
         jax.config.update("jax_enable_x64", False)
 
         denoiser_model = create_denoiser_model(run_sett)
@@ -259,7 +258,6 @@ def main():
             max_to_keep=max_to_keep,
         )
     elif mode == "sample":
-        # Sampling/generation should be in double precision
         jax.config.update("jax_enable_x64", True)
 
         denoiser_model = create_denoiser_model(run_sett)
@@ -300,7 +298,7 @@ def main():
                 denoise_fn,
                 key_uncond,
                 num_samples=num_gen_samples,
-                num_plots=num_conditionings,
+                num_conditions=num_conditionings,
                 data_sett=data_sett,
                 run_sett=run_sett,
             )
@@ -320,20 +318,7 @@ def main():
             print(samples.std())
             print(samples.shape)
             _save_samples_h5(sample_file, samples)
-        elif generation_type == "dps":
-            samples = sample_dps(
-                diffusion_scheme,
-                denoise_fn,
-                y_bar=y,
-                rng_key=key_dps,
-                num_samples=num_gen_samples,
-                run_sett=run_sett,
-            )
-            print(samples.std())
-            print(samples.shape)
-            _save_samples_h5(sample_file, samples)
     elif mode == "eval":
-        # Evaluation/metrics in double precision
         jax.config.update("jax_enable_x64", True)
         generation_type = run_sett_global["generation_type"]
         is_conditional = generation_type != "unconditional"
@@ -377,7 +362,6 @@ def main():
             run_id_suffix=run_id_suffix,
         )
 
-    # Flush/close the writer once
     try:
         writer.flush()
     except Exception:

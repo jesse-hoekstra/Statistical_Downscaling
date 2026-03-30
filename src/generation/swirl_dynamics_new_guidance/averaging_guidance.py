@@ -73,20 +73,18 @@ class InfillFromBlockAverages:
                 return error, denoised
 
             constraint_grad, denoised = jax.grad(constraint, has_aux=True)(x)
-            # Rescale consistent with InfillFromSlices: cond_fraction = n_y/n_x = 1/k
             cond_fraction = 1.0 / k
             guide_strength = self.guide_strength / cond_fraction
             denoised = denoised - guide_strength * constraint_grad
 
-            # Projection: shift each block uniformly so its mean equals observed_averages[i].
-            # This is the orthogonal projection onto {x : C x = y} for block-averaging C.
+            # Projection choice (for reference from paper): shift each block uniformly so its mean equals observed_averages[i].
             batch, n_x, d = denoised.shape
             n_y = n_x // k
             blocks = denoised.reshape(batch, n_y, k, d)
-            block_means = blocks.mean(axis=2, keepdims=True)  # (batch, n_y, 1, d)
+            block_means = blocks.mean(axis=2, keepdims=True)
             correction = (
                 guidance_inputs["observed_averages"][:, :, None, :] - block_means
-            )  # (batch, n_y, 1, d)
+            )
             return (blocks + correction).reshape(batch, n_x, d)
 
         return _guided_denoise

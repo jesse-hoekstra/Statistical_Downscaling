@@ -72,13 +72,11 @@ def get_dataset(
     else:
         raise ValueError(f"Unsupported split string: {split}")
 
-    # Ensure deterministic ordering and repeats.
     options = tf.data.Options()
     options.experimental_deterministic = True
     ds = ds.with_options(options)
     ds = ds.repeat()
 
-    # Enumerate to derive a stable per-sample index used as RNG key suffix.
     global_seed = tf.cast(int(seed), tf.int32)
     ds = ds.enumerate()
 
@@ -87,7 +85,6 @@ def get_dataset(
         sample_len = tf.shape(sample)[0]
         idx_mod = tf.math.floormod(index, tf.cast(total_len, tf.int64))
         idx_mod_i32 = tf.cast(idx_mod, tf.int32)
-        # Stateless uniform shift in [0, L) keyed by (seed, sample_idx).
         shift = tf.random.stateless_uniform(
             shape=[],
             minval=0,

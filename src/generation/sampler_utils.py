@@ -22,21 +22,23 @@ def sample_unconditional(
     denoise_fn,
     rng_key: jax.Array,
     num_samples: int,
-    num_plots: int,
+    num_conditions: int,
     data_sett,
     run_sett,
 ):
-    """Generate unconditional samples using an SDE sampler. num_plots is equal to the number of conditions in the conditional samplers.
+    """Generate unconditional samples using an SDE sampler.
 
     Args:
         diffusion_scheme: Diffusion schedule object.
         denoise_fn: Callable denoiser inference function.
         rng_key: JAX PRNG key for sampling.
         num_samples: Number of independent samples to draw.
-        num_plots: Number of plots to generate, equal to the number of conditions in the conditional samplers.
+        num_conditions: Batch size per draw; matches the number of conditions
+            used in the conditional samplers.
         run_sett: Settings dictionary.
+
     Returns:
-        Array of generated samples with shape `(num_samples, num_plots, d, 1)`.
+        Array of generated samples with shape `(num_samples, num_conditions, d, 1)`.
     """
     sampler = dfn_lib.SdeSampler(
         input_shape=(data_sett["n_x"], data_sett["d"]),
@@ -53,7 +55,9 @@ def sample_unconditional(
         return_full_paths=False,
     )
     keys = jax.random.split(rng_key, int(num_samples))
-    generate_one = jax.jit(lambda k: sampler.generate(rng=k, num_samples=num_plots))
+    generate_one = jax.jit(
+        lambda k: sampler.generate(rng=k, num_samples=num_conditions)
+    )
 
     def loop_body(carry, key):
         samples = generate_one(key)

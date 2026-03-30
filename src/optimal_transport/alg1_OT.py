@@ -1,7 +1,7 @@
 """Core normalizing-flow and policy-gradient components for optimal transport.
 
 This module implements:
-- sinusoidal time embeddings for discrete time steps (as seperate function as it has multiple calls in separate modules)
+- sinusoidal time embeddings for discrete time steps (as a separate function due to multiple call sites)
 - a conditional spline coupling flow (per-dimension rational-quadratic splines)
 - a correlation network producing time- and state-dependent correlation `rho`
 - a normalizing-flow model that samples sequences and computes log-probabilities

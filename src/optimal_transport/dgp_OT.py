@@ -154,7 +154,6 @@ class TrueDataModelUnimodal:
     def log_prob_y_cond_steps(
         self, y: jnp.ndarray, latents=None, mode: str = "oracle"
     ) -> jnp.ndarray:
-        # y: (B,N_len,d_prime,1) or (N_len,d_prime,1)
         if y.ndim == 3:
             y = y[None, ...]
         B, N_len, d_prime, _ = y.shape
@@ -163,11 +162,9 @@ class TrueDataModelUnimodal:
         prev0 = jnp.zeros((B, 1, d_prime, 1), dtype=jnp.float32)
         prev = jnp.concatenate([prev0, y[:, :-1, :, :]], axis=1)
 
-        noise = y - (
-            self.base_means[None, None, :, :] + self.phi * prev
-        )  # (B,N_len,d_prime,1)
+        noise = y - (self.base_means[None, None, :, :] + self.phi * prev)
         lp = _logpdf_normal(noise, mean=0.0, std=0.5)
-        return jnp.sum(lp, axis=(2, 3))  # (B,N_len)
+        return jnp.sum(lp, axis=(2, 3))
 
     def log_prob_yp_cond_steps(
         self, yp: jnp.ndarray, latents=None, mode: str = "oracle"
@@ -303,17 +300,14 @@ class TrueDataModelBimodal:
         prev0 = jnp.zeros((B, 1, d_prime, 1), dtype=jnp.float32)
         prev = jnp.concatenate([prev0, y[:, :-1, :, :]], axis=1)
 
-        noise = y - (
-            self.base_means[None, None, :, :] + 0.5 * prev
-        )  # (B,N_len,d_prime,1)
+        noise = y - (self.base_means[None, None, :, :] + 0.5 * prev)
 
-        # right: Normal(1.5,0.5), left: 2.5*Beta(2,5)-2.5
         lp_right = _logpdf_normal(noise, mean=1.5, std=0.5)
         lp_left = _logpdf_beta_affine(noise, a=2.0, b=5.0, scale=2.5, shift=-2.5)
 
         sel_y_bt = sel_y[:, None, :, :]
         lp = jnp.where(sel_y_bt, lp_right, lp_left)
-        return jnp.sum(lp, axis=(2, 3))  # (B,N_len)
+        return jnp.sum(lp, axis=(2, 3))
 
     def log_prob_yp_cond_steps(
         self, yp: jnp.ndarray, latents=None, mode: str = "oracle"
@@ -332,14 +326,13 @@ class TrueDataModelBimodal:
 
         if latents.ndim == 2:
             latents = jnp.broadcast_to(latents[None, ...], (B, d_prime, 2))
-        sel_yp = latents[:, :, 1:2]  # (B,d_prime,1)
+        sel_yp = latents[:, :, 1:2]
 
         prev0 = jnp.zeros((B, 1, d_prime, 1), dtype=jnp.float32)
         prev = jnp.concatenate([prev0, yp[:, :-1, :, :]], axis=1)
 
         noise = yp - (self.base_means[None, None, :, :] + 0.5 * prev)
 
-        # right: 2.5*Beta(5,2)+0.5, left: Normal(-1.5,0.5)
         lp_right = _logpdf_beta_affine(noise, a=5.0, b=2.0, scale=2.5, shift=0.5)
         lp_left = _logpdf_normal(noise, mean=-1.5, std=0.5)
 
@@ -421,7 +414,7 @@ class RobustHedgingModel:
         )
         prev = jnp.concatenate([prev0, y[:, :-1, :, :]], axis=1)
 
-        inc = y - prev  # dx
+        inc = y - prev
         std = (self.sigma_x * self._sqrt_dt).reshape(1, 1, d_prime, 1)
         lp = _logpdf_normal(inc, mean=0.0, std=std)
         return jnp.sum(lp, axis=(2, 3))
@@ -521,7 +514,7 @@ class KSTrueDataModel:
 
         n_x, n_y = x_train_eval.shape[1], y_train_eval.shape[1]
         factor = int(n_x / n_y)
-        yp_train_eval = x_train_eval[:, ::factor]  # (M, n_y, d)
+        yp_train_eval = x_train_eval[:, ::factor]
 
         self.y_train_eval = jnp.asarray(y_train_eval[..., None], dtype=jnp.float32)
         self.yp_train_eval = jnp.asarray(yp_train_eval[..., None], dtype=jnp.float32)

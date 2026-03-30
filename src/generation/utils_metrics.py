@@ -324,7 +324,7 @@ def evaluate_sample(
     base_dir = run_sett.get("work_dir", os.getcwd())
     os.makedirs(base_dir, exist_ok=True)
 
-    seed = 0  # fixed for reproducible metric estimates across runs
+    seed = 0
     num_conditionings = int(data_sett["num_conditionings"])
     generation_type = str(run_sett_global["generation_type"])
     n_x = int(data_sett["n_x"])
@@ -349,7 +349,7 @@ def evaluate_sample(
         print(f"Loaded yp_trajs from: {_yp_path}")
         y = y[:num_conditionings]
         if y.ndim == 4 and y.shape[-1] == 1:
-            y = y[..., 0]  # (C, n_y, d, 1) -> (C, n_y, d)
+            y = y[..., 0]
     else:
         y = np.asarray(true_data_model.y_test)[:num_conditionings]
 
@@ -630,7 +630,6 @@ def plot_marginal_densities(
 
     data_model = str(run_sett["global"]["data_model"]).strip().lower()
 
-    # Flatten each entry to (N*C, n_x, d)
     flat = {
         label: np.asarray(arr).reshape(-1, *np.asarray(arr).shape[2:])
         for label, arr in samples_dict.items()
@@ -645,10 +644,9 @@ def plot_marginal_densities(
         )
     positions = [min(p, n_x - 1) for p in positions]
 
-    # AR-only: precompute closed-form marginal helpers
     if data_model == "ar":
         phi = float(run_sett["data_AR"]["phi"])
-        sigma = 0.5  # N(0, 0.5^2) innovations
+        sigma = 0.5
         channel_means = np.linspace(-2.0, 2.0, d)
 
         def _channel_mean(i):
@@ -664,7 +662,6 @@ def plot_marginal_densities(
                 return sigma * np.sqrt(float(n + 1))
             return sigma * np.sqrt((1.0 - phi ** (2 * (n + 1))) / (1.0 - phi**2))
 
-    # Non-AR: flatten x_test to (N_total, n_x, d)
     if data_model != "ar":
         if x_test is None:
             raise ValueError("x_test must be provided for non-AR data models")
@@ -682,7 +679,7 @@ def plot_marginal_densities(
     for dim in range(d):
         n_pos = len(positions)
         n_cols = min(n_pos, 4)
-        n_rows = (n_pos + n_cols - 1) // n_cols  # ceil division
+        n_rows = (n_pos + n_cols - 1) // n_cols
         _, axes_grid = plt.subplots(
             n_rows, n_cols, figsize=(4 * n_cols, 4 * n_rows), sharey=False
         )

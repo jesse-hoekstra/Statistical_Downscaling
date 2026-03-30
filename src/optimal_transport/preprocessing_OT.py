@@ -79,7 +79,7 @@ class DataNormalizer:
         num_samples = int(self.num_samples)
         chunk_size = int(self.chunk_size)
 
-        sum_y = sum_yp = sumsq_y = sumsq_yp = None  # initialised after first batch
+        sum_y = sum_yp = sumsq_y = sumsq_yp = None
         total = 0
         cur_key = norm_key
         remaining = num_samples
@@ -88,11 +88,8 @@ class DataNormalizer:
             cur = min(remaining, chunk_size)
             cur_key, use_key = jax.random.split(cur_key)
             keys = jax.random.split(use_key, cur)
-            y, yp = jax.vmap(self.true_data_model.sample_true_trajectory)(
-                keys
-            )  # (cur, N+1, d, 1)
+            y, yp = jax.vmap(self.true_data_model.sample_true_trajectory)(keys)
 
-            # Infer d from data on the first iteration
             if sum_y is None:
                 d = y.shape[2]
                 sum_y = jnp.zeros((N_len, d, 1), dtype=jnp.float32)

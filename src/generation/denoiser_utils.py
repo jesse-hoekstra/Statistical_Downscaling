@@ -14,7 +14,6 @@ def _as_tuple(value):
     if isinstance(value, str):
         parts = [p.strip() for p in value.split(",") if p.strip()]
         return tuple(int(p) for p in parts)
-    # fallback for single scalar
     return (int(value),)
 
 

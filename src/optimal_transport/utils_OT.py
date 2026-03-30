@@ -167,9 +167,7 @@ def build_eval_batch(
             ty, typ, lat = jax.vmap(_one)(keys)
             ys.append(np.array(jax.device_get(ty)))
             yps.append(np.array(jax.device_get(typ)))
-            lats.append(
-                np.array(jax.device_get(lat)).astype(np.int8)
-            )  # (cur,d_prime,2)
+            lats.append(np.array(jax.device_get(lat)).astype(np.int8))
 
             remaining -= cur
 
@@ -246,15 +244,12 @@ def _stack_traj_features(batch: EvalBatch, B: int) -> Tuple[np.ndarray, np.ndarr
     Returns:
       X_true: (B, P), X_flow: (B, P)
     """
-    ty = batch.true_y[:B].astype(np.float32)  # (B,N_len,d_prime,1)
+    ty = batch.true_y[:B].astype(np.float32)
     typ = batch.true_yp[:B].astype(np.float32)
     fy = batch.flow_y[:B].astype(np.float32)
     fyp = batch.flow_yp[:B].astype(np.float32)
 
-    # flatten each trajectory
-    X_true = np.concatenate(
-        [ty.reshape(B, -1), typ.reshape(B, -1)], axis=1
-    )  # (B, 2*N_len*d_prime)
+    X_true = np.concatenate([ty.reshape(B, -1), typ.reshape(B, -1)], axis=1)
     X_flow = np.concatenate([fy.reshape(B, -1), fyp.reshape(B, -1)], axis=1)
     return X_true, X_flow
 
@@ -287,7 +282,6 @@ def _median_heuristic_sigma(
     diff = Z[i] - Z[j]
     sq = np.sum(diff * diff, axis=1)
     med_sq = float(np.median(sq))
-    # For k(x,y)=exp(-||x-y||^2/(2 sigma^2)), common heuristic: sigma^2 = 0.5 * median(||x-y||^2)
     sigma2 = max(0.5 * med_sq, 1e-12)
     return float(np.sqrt(sigma2))
 
@@ -311,11 +305,9 @@ def _mmd2_rbf_rff(
     R = int(num_features)
 
     sigma = float(max(sigma, 1e-6))
-    # w ~ N(0, 1/sigma^2 I)
     W = rng.normal(size=(P, R)).astype(np.float32) / sigma
     b = rng.uniform(0.0, 2.0 * np.pi, size=(R,)).astype(np.float32)
 
-    # phi(x) = sqrt(2/R) * cos(xW + b)
     scale = np.sqrt(2.0 / R).astype(np.float32)
     PhiX = scale * np.cos(X @ W + b)
     PhiY = scale * np.cos(Y @ W + b)
@@ -341,7 +333,7 @@ def _sliced_wasserstein_w2(
       SWD  = sqrt(SWD2)
       SWD_std = std of per-projection SWD(theta) = sqrt(SWD2(theta))
 
-    Returns (SWD, SWD2, SWD_std).
+    Returns (SWD, SWD2).
     """
     rng = np.random.default_rng(int(seed))
     X = np.asarray(X, dtype=np.float32)
@@ -360,13 +352,13 @@ def _sliced_wasserstein_w2(
     Theta = rng.normal(size=(P, K)).astype(np.float32)
     Theta /= np.linalg.norm(Theta, axis=0, keepdims=True) + 1e-12
 
-    projX = X @ Theta  # (m, K)
+    projX = X @ Theta
     projY = Y @ Theta
 
     projX.sort(axis=0)
     projY.sort(axis=0)
 
-    per_proj_swd2 = np.mean((projX - projY) ** 2, axis=0)  # (K,)
+    per_proj_swd2 = np.mean((projX - projY) ** 2, axis=0)
     swd2 = float(np.mean(per_proj_swd2))
     swd = float(np.sqrt(max(swd2, 0.0)))
     return swd, swd2
@@ -584,7 +576,7 @@ def compute_transition_marginal_kl_from_batch(
     logQ_y = model.logprob_steps_y_batch_original(params, y)
     logQ_yp = model.logprob_steps_yp_batch_original(params, yp)
 
-    kl_y_t = jnp.mean(logT_y - logQ_y, axis=0)  # (N_len,)
+    kl_y_t = jnp.mean(logT_y - logQ_y, axis=0)
     kl_yp_t = jnp.mean(logT_yp - logQ_yp, axis=0)
     kl_tot = kl_y_t + kl_yp_t
 
@@ -669,7 +661,7 @@ def plot_transition_kl(
 
 
 def _adjacent_corr_from_trajs_np(trajs: np.ndarray, eps: float = 1e-10) -> np.ndarray:
-    x = trajs[..., 0] if trajs.ndim == 4 else trajs  # (B,N_len,D)
+    x = trajs[..., 0] if trajs.ndim == 4 else trajs
     _, N_len, _ = x.shape
     out = []
     for t in range(1, N_len):
@@ -963,7 +955,7 @@ def _perm_test_adjcorr_trajlevel(
     T2_obs = float(np.sum(T_point**2))
 
     rng = np.random.default_rng(seed)
-    combined = np.concatenate([trajs_A, trajs_B], axis=0)  # (2B,N_len,D,1)
+    combined = np.concatenate([trajs_A, trajs_B], axis=0)
     idx_all = np.arange(2 * B)
 
     cnt_point = np.zeros(num_lags, dtype=np.int64)
@@ -1020,9 +1012,7 @@ def run_adjacent_corr_permutation_tests_from_batch(
     B0 = int(batch.true_y.shape[0])
     B = int(min(run_sett_metrics["perm_test_metrics"]["adjcorr_test_samples"], B0))
 
-    true_stacked = np.concatenate(
-        [batch.true_y[:B], batch.true_yp[:B]], axis=2
-    )  # (B,N_len,2d_prime,1)
+    true_stacked = np.concatenate([batch.true_y[:B], batch.true_yp[:B]], axis=2)
     flow_stacked = np.concatenate([batch.flow_y[:B], batch.flow_yp[:B]], axis=2)
 
     res = _perm_test_adjcorr_trajlevel(
@@ -1063,8 +1053,8 @@ def _estimate_cost_from_batch(batch: EvalBatch) -> float:
       return mean over paths.
     Uses FLOW samples in ORIGINAL space.
     """
-    diff = batch.flow_y - batch.flow_yp  # (B,N_len,d_prime,1)
-    v0 = np.sum(diff * diff, axis=(1, 2, 3))  # (B,)
+    diff = batch.flow_y - batch.flow_yp
+    v0 = np.sum(diff * diff, axis=(1, 2, 3))
     return float(np.mean(v0))
 
 
