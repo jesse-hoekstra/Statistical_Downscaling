@@ -13,3 +13,4 @@ __pycache__/
 # Output files
 output/
 wandb/
+wandb_integration/
