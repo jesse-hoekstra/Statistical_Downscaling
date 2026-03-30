@@ -776,7 +776,9 @@ def plot_marginal_densities(
     n_x, d = first.shape[1], first.shape[2]
 
     if positions is None:
-        positions = [18, 36, 54] if data_model == "ks" else [100, 150, 200]
+        positions = (
+            [18, 36, 54] if data_model == "ks" else [0, 50, 100, 150, 200, 250, n_x - 1]
+        )
     positions = [min(p, n_x - 1) for p in positions]
 
     # AR-only: precompute closed-form marginal helpers
@@ -815,9 +817,15 @@ def plot_marginal_densities(
 
     for dim in range(d):
         n_pos = len(positions)
-        _, axes = plt.subplots(1, n_pos, figsize=(4 * n_pos, 4), sharey=False)
-        if n_pos == 1:
-            axes = [axes]
+        n_cols = min(n_pos, 4)
+        n_rows = (n_pos + n_cols - 1) // n_cols  # ceil division
+        _, axes_grid = plt.subplots(
+            n_rows, n_cols, figsize=(4 * n_cols, 4 * n_rows), sharey=False
+        )
+        axes_flat = np.array(axes_grid).flatten()
+        for ax in axes_flat[n_pos:]:
+            ax.set_visible(False)
+        axes = axes_flat[:n_pos]
 
         for ax, p in zip(axes, positions):
             for (_, samples), color, label in zip(flat.items(), colors, labels):
@@ -825,8 +833,9 @@ def plot_marginal_densities(
                     samples[:, p, dim],
                     bins=60,
                     density=True,
+                    histtype="step",
                     color=color,
-                    alpha=0.4,
+                    linewidth=1.5,
                     label=label,
                 )
 
