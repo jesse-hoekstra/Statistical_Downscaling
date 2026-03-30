@@ -1,8 +1,6 @@
 import jax
 import jax.numpy as jnp
 import flax
-import argparse
-import yaml
 from swirl_dynamics.lib.diffusion import diffusion
 import swirl_dynamics.lib.diffusion as dfn_lib
 from swirl_dynamics.lib.solvers import sde
@@ -12,12 +10,6 @@ from typing import Any, Callable, TypeAlias
 Array: TypeAlias = jax.Array
 ArrayMapping: TypeAlias = Mapping[str, Array]
 Params: TypeAlias = Mapping[str, Any]
-
-parser = argparse.ArgumentParser()
-parser.add_argument("--config", type=str, default="src/generation/settings_GEN.yaml")
-args = parser.parse_args()
-with open(args.config, "r") as f:
-    run_sett = yaml.safe_load(f)
 
 
 def dlog_dt(f: diffusion.ScheduleFn) -> diffusion.ScheduleFn:
@@ -40,7 +32,7 @@ class NewDriftSdeSampler(dfn_lib.SdeSampler):
     guidance_fn: Callable[[Array, Array, Array], Array] | None = flax.struct.field(
         default=None, pytree_node=False
     )
-    T: float = float(run_sett["global"]["T"])
+    T: float = 1.0
 
     def __post_init__(self):
         if self.guidance_fn is None:
