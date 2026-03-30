@@ -5,18 +5,6 @@ import optax
 import jax
 from swirl_dynamics import templates
 import orbax.checkpoint as ocp
-import argparse
-import yaml
-
-
-parser = argparse.ArgumentParser()
-parser.add_argument("--config", type=str, default="src/generation/settings_GEN.yaml")
-args = parser.parse_args()
-with open(args.config, "r") as f:
-    run_sett = yaml.safe_load(f)
-
-data_model = str(run_sett["global"]["data_model"]).strip().lower()
-data_sett = run_sett["data_KS" if data_model == "ks" else "data_AR"]
 
 
 def _as_tuple(value):
@@ -30,7 +18,9 @@ def _as_tuple(value):
     return (int(value),)
 
 
-def vp_linear_beta_schedule(beta_min: float = None, beta_max: float = None):
+def vp_linear_beta_schedule(
+    run_sett: dict, beta_min: float = None, beta_max: float = None
+):
     """Construct an invertible variance-preserving linear-β noise schedule.
 
     The schedule follows a linear β(t) in t and defines a mapping between
@@ -41,6 +31,7 @@ def vp_linear_beta_schedule(beta_min: float = None, beta_max: float = None):
     `run_sett['train_denoiser']['beta_min']` and `run_sett['train_denoiser']['beta_max']`.
 
     Args:
+        run_sett: Global run settings dict.
         beta_min: Optional lower bound for β. Defaults to config.
         beta_max: Optional upper bound for β. Defaults to config.
 
@@ -63,11 +54,14 @@ def vp_linear_beta_schedule(beta_min: float = None, beta_max: float = None):
     return dfn_lib.InvertibleSchedule(forward, inverse)
 
 
-def create_denoiser_model():
+def create_denoiser_model(run_sett: dict):
     """Instantiate the UNet denoiser from configuration.
 
     Hyperparameters are read from `run_sett['UNET']` and passed to
     `dfn_lib.PreconditionedDenoiserUNet`.
+
+    Args:
+        run_sett: Global run settings dict.
 
     Returns:
         dfn_lib.PreconditionedDenoiserUNet ready to be wrapped in a model.
@@ -85,7 +79,7 @@ def create_denoiser_model():
     )
 
 
-def create_diffusion_scheme(data_std: float):
+def create_diffusion_scheme(data_std: float, run_sett: dict):
     """Create a variance-preserving diffusion scheme.
 
     Uses the variance-preserving linear-β schedule from
@@ -93,12 +87,13 @@ def create_diffusion_scheme(data_std: float):
 
     Args:
         data_std: Standard deviation of the training data distribution.
+        run_sett: Global run settings dict.
 
     Returns:
         dfn_lib.Diffusion configured for variance preservation.
     """
     return dfn_lib.Diffusion.create_variance_preserving(
-        sigma=vp_linear_beta_schedule(),
+        sigma=vp_linear_beta_schedule(run_sett),
         data_std=data_std,
     )
 
@@ -124,10 +119,12 @@ def restore_denoise_fn(checkpoint_dir: str, denoiser_model):
     )
 
 
-def build_model(denoiser_model, diffusion_scheme, data_std: float):
+def build_model(
+    denoiser_model, diffusion_scheme, data_std: float, data_sett: dict, run_sett: dict
+):
     """Wrap the denoiser into a `DenoisingModel` with sampling/weighting.
 
-    The input shape is `(d, 1)` where `d` is read from `run_sett['global']['d']`.
+    The input shape is `(n_x, d)` where both are read from `data_sett`.
     Time sampling uses `time_uniform_sampling` over the diffusion scheme and
     noise weighting uses EDM weighting parameterized by `data_std`.
 
@@ -135,6 +132,8 @@ def build_model(denoiser_model, diffusion_scheme, data_std: float):
         denoiser_model: The UNet-like denoiser module.
         diffusion_scheme: The diffusion schedule object.
         data_std: Standard deviation of the data, used for weighting.
+        data_sett: Data settings dict (must contain 'n_x' and 'd').
+        run_sett: Global run settings dict.
 
     Returns:
         dfn.DenoisingModel ready for training.
@@ -151,7 +150,7 @@ def build_model(denoiser_model, diffusion_scheme, data_std: float):
     )
 
 
-def build_trainer(model):
+def build_trainer(model, run_sett: dict):
     """Create a `DenoisingTrainer` with optimizer, RNG, and EMA from config.
 
     The optimizer applies gradient clipping and Adam with a warmup cosine decay
@@ -159,6 +158,7 @@ def build_trainer(model):
 
     Args:
         model: The `dfn.DenoisingModel` to train.
+        run_sett: Global run settings dict.
 
     Returns:
         dfn.DenoisingTrainer configured for training.
