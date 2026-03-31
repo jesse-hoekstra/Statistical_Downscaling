@@ -1,7 +1,7 @@
 global:
   seed: 888
   RNG_NAMESPACE: 20260115
-  generation_type: 'wan_conditional'
+  generation_type: 'conditional'
   mode: 'train'
   data_model: 'ar'  
   output_dir: 'src/generation/output/'

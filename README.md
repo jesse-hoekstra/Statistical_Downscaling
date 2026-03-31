@@ -1,6 +1,6 @@
 # Statistical Downscaling for Time-Series
 
-A JAX-based implementation of statistical downscaling for time-series data, combining **optimal transport** (OT) and **diffusion-based generation** (GEN) into a two-stage pipeline. Applied to Kuramoto–Sivashinsky (KS) dynamics and autoregressive (AR) processes.
+A JAX-based implementation of statistical downscaling for time-series data, combining **optimal transport** (OT) and **diffusion-based generation** (GEN) into a two-stage pipeline. Applied to autoregressive (AR) processes.
 
 ---
 
@@ -9,7 +9,7 @@ A JAX-based implementation of statistical downscaling for time-series data, comb
 The pipeline consists of two complementary components:
 
 1. **Optimal Transport** (`src/optimal_transport/`) — Learns a transport policy that maps low-resolution conditional trajectories *y* to high-resolution counterparts *y′* via normalizing flows trained with a policy gradient objective.
-2. **Generation** (`src/generation/`) — Trains a VP-diffusion denoiser (UNet) on high-resolution data, with optional guidance at sampling time: unconditional, constraint-aware (WAN), or PDE-guided (using OT output for debiased conditioning).
+2. **Generation** (`src/generation/`) — Trains a VP-diffusion denoiser (UNet) on high-resolution data, with optional guidance at sampling time: unconditional, constraint-aware (using OT output for debiased conditioning).
 
 ---
 
@@ -24,7 +24,7 @@ Statistical_Downscaling/
 │   │   ├── requirements_GEN.txt        # Dependencies
 │   │   ├── data_utils.py               # HDF5 data loading & tf.data pipelines
 │   │   ├── denoiser_utils.py           # UNet, VP diffusion scheme, training
-│   │   ├── sampler_utils.py            # Unconditional / WAN / PDE samplers
+│   │   ├── sampler_utils.py            # Unconditional 
 │   │   ├── utils_metrics.py            # Evaluation metrics
 │   │   └── swirl_dynamics_new_guidance/
 │   └── optimal_transport/              # Optimal transport pipeline
@@ -100,30 +100,19 @@ All generation workflows are driven by `main_GEN.py` and controlled via `global.
 global:
   mode: train
   train_denoiser: True
-  train_pde: False
 ```
 
 ```bash
 python src/generation/main_GEN.py --config src/generation/settings_GEN.yaml
 ```
 
-#### Train the PDE solver (requires a denoiser checkpoint)
-
-```yaml
-global:
-  mode: train
-  train_denoiser: False
-  train_pde: True
-```
-
-Set both to `True` to run both in sequence.
 
 #### Sample / generate
 
 ```yaml
 global:
   mode: sample
-  generation_type: wan_conditional   # unconditional | wan_conditional 
+  generation_type: conditional   # unconditional | conditional 
 ```
 
 ```bash
@@ -135,14 +124,14 @@ Samples are written to `main_GEN/<run_name>/samples_<generation_type>.h5`.
 | `generation_type` | Description |
 |---|---|
 | `unconditional` | Solely dependent on the learned prior |
-| `wan_conditional` | Projecting the constraint space, correcting the unconstraint space. |
+| `conditional` | Projecting the constraint space, correcting the unconstraint space. |
 
 #### Evaluate
 
 ```yaml
 global:
   mode: eval
-  generation_type: wan_conditional   # must match the saved sample file
+  generation_type: conditional   # must match the saved sample file
 ```
 
 ```bash
@@ -165,7 +154,6 @@ python src/generation/main_GEN.py --config src/generation/settings_GEN.yaml
 | `preprocessing` | Normalisation, winsor clipping threshold |
 | `ema` | `ema_decay`, `use_ema_eval` |
 | `logging` | `log_train_every`, `log_eval_every`, `save_every` |
-| `wandb` | `use_wandb`, project/entity/run name |
 
 ### `settings_GEN.yaml`
 
@@ -177,7 +165,6 @@ python src/generation/main_GEN.py --config src/generation/settings_GEN.yaml
 | `UNET` | Channel sizes, number of blocks, attention heads |
 | `exp_tspan` | `num_steps` (diffusion steps), `end_sigma` |
 | `ema` | `ema_decay`, `use_ema_eval` |
-| `wandb` | `use_wandb`, optional `WANDB_DISABLED=1` env var |
 
 ---
 
@@ -197,10 +184,9 @@ python src/generation/main_GEN.py --config src/generation/settings_GEN.yaml
 | File | Description |
 |---|---|
 | `denoiser_utils.py` | UNet construction, VP diffusion scheme, Orbax-based checkpointing, EMA restore |
-| `sampler_utils.py` | `sample_unconditional`, `sample_wan_guided` (LinearConstraint), `sample_pde_guided` (NewDriftSdeSampler) |
+| `sampler_utils.py` | `sample_unconditional`, `sample_conditional` |
 | `utils_metrics.py` | Constraint RMSE, KLD (KDE), MELR (spectral energy mismatch), 1-Wasserstein, sample variability |
 | `data_utils.py` | HDF5 KS dataset loader, deterministic `tf.data` training/eval pipelines |
-| `wandb_adapter.py` | `WandbWriter` mirroring `clu.metric_writers`; toggle via `wandb.use_wandb` or `WANDB_DISABLED=1` |
 
 ---
 

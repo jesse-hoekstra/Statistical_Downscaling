@@ -52,7 +52,7 @@ from src.generation.utils_metrics import evaluate_sample, evaluate_all_samples
 from src.generation.data_utils import get_dataset
 from src.generation.sampler_utils import (
     sample_unconditional,
-    sample_wan_guided,
+    sample_conditional,
 )
 
 parser = argparse.ArgumentParser()
@@ -305,8 +305,8 @@ def main():
             print(jnp.mean(samples))
             print(samples.std())
             _save_samples_h5(sample_file, samples)
-        elif generation_type == "wan_conditional":
-            samples = sample_wan_guided(
+        elif generation_type == "conditional":
+            samples = sample_conditional(
                 diffusion_scheme,
                 denoise_fn,
                 y_bar=y,

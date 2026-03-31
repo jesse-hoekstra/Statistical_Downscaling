@@ -1,12 +1,4 @@
-"""Metrics used to evaluate generated KS samples against reference data.
-
-Provided metrics (pooled over samples/conditions where applicable):
-- constraint RMSE: relative error of C x vs. y' per condition, averaged.
-- sample variability: sqrt(mean pixel-wise variance) across generated samples.
-- KLD (sum over dimensions) via KDE on a fixed grid.
-- MELR: mismatch of log energy spectra (weighted or unweighted).
-- 1-Wasserstein (per-dimension, histogram-based) averaged over dimensions.
-"""
+"""Metrics used to evaluate generated samples against reference data."""
 
 import os
 import h5py
@@ -27,11 +19,11 @@ def _single_calculate_constraint_rmse(
     """Relative RMSE for one condition.
 
     Args:
-        predicted_samples: Array `(N, n_y, d)` predicted at LR for one condition.
+        predicted_samples: Array `(num_samples, n_y, d)` predicted at LR for one condition.
         condition_reference_samples: Array `(n_y, d)` reference y' for one condition.
 
     Returns:
-        Scalar mean relative RMSE over N samples.
+        Scalar mean relative RMSE over num_samples samples.
     """
     diff_norm = jnp.linalg.norm(
         predicted_samples - condition_reference_samples[None], axis=(1, 2)
@@ -49,19 +41,19 @@ def calculate_constraint_rmse(
     """Compute constraint RMSE pooled over conditions.
 
     Args:
-        predicted_samples: Array `(N, C, n_x, d)` of HF predictions.
+        predicted_samples: Array `(num_samples, C, n_x, d)` of HF predictions.
         condition_reference_samples: Array `(C, n_y, d)` of LR y' per condition.
         downsampling_type: `"select"` (every k-th point, KS) or `"average"`
             (block mean, AR).
 
     Returns:
-        Scalar RMSE (mean, std) averaged over conditions.
+        Scalar mean relative RMSE averaged over conditions.
     """
-    N, C, n_x, d = predicted_samples.shape
+    num_samples, C, n_x, d = predicted_samples.shape
     n_y = condition_reference_samples.shape[1]
     step = n_x // n_y
     if downsampling_type == "average":
-        x_lr = predicted_samples.reshape(N, C, n_y, step, d).mean(axis=3)
+        x_lr = predicted_samples.reshape(num_samples, C, n_y, step, d).mean(axis=3)
     else:
         x_lr = predicted_samples[:, :, ::step, :]
     vec_c = jax.vmap(_single_calculate_constraint_rmse, in_axes=(1, 0), out_axes=0)(
@@ -74,7 +66,7 @@ def _single_calculate_sample_variability(generated_samples: jnp.ndarray) -> floa
     """Compute variability for one condition by aggregating across samples.
 
     Args:
-        generated_samples: Array `(N, d, 1)` for a fixed condition.
+        generated_samples: Array `(num_samples, n_x*d, 1)` for a fixed condition.
 
     Returns:
         Scalar sqrt(mean variance) across spatial positions.
@@ -91,7 +83,7 @@ def calculate_sample_variability(generated_samples: jnp.ndarray) -> float:
     """Average sample variability across conditions.
 
     Args:
-        generated_samples: Array `(N, C, d, 1)`.
+        generated_samples: Array `(num_samples, C, n_x*d, 1)`.
 
     Returns:
         Scalar mean of variability over conditions.
@@ -110,8 +102,8 @@ def _single_dimension_calculate_kld(
     """KL divergence for one spatial dimension using KDE and trapezoidal rule.
 
     Args:
-        predicted_samples: Array `(N, 1)` for one dimension.
-        reference_samples: Array `(M, 1)` for one dimension.
+        predicted_samples: Array `(num_samples, 1)` for one dimension.
+        reference_samples: Array `(num_ref, 1)` for one dimension.
         epsilon: Small positive value to avoid division by zero.
 
     Returns:
@@ -149,8 +141,8 @@ def _single_calculate_kld(
     """Sum of 1D KLD over spatial dimensions for a single pool of samples.
 
     Args:
-        predicted_samples: Array `(N, d, 1)`.
-        reference_samples: Array `(M, d, 1)`.
+        predicted_samples: Array `(num_samples, d, 1)`.
+        reference_samples: Array `(num_ref, d, 1)`.
         epsilon: Stability constant.
 
     Returns:
@@ -177,11 +169,11 @@ def calculate_kld_pooled(
 ) -> float:
     """KLD pooled across samples and conditions.
 
-    Pools the (N, C) axes of predictions into a single batch and computes KLD.
+    Pools the (num_samples, C) axes of predictions into a single batch and computes KLD.
 
     Args:
-        predicted_samples: `(N, C, d, 1)`.
-        reference_samples: `(M, d, 1)`.
+        predicted_samples: `(num_samples, C, d, 1)`.
+        reference_samples: `(num_ref, d, 1)`.
         epsilon: Stability constant.
 
     Returns:
@@ -278,13 +270,13 @@ def calculate_wass1_pooled(
 def _flatten_channels(arr: np.ndarray) -> np.ndarray:
     """Flatten the channel dimension into the batch dimension.
 
-    (B, n_x, d) -> (B*d, n_x, 1)
+    (num_samples, n_x, d) -> (num_samples*d, n_x, 1)
 
     Each spatial channel `d` becomes an independent sample, preserving the
     spatial structure along `n_x`.
     """
-    B, n_x, d = arr.shape
-    return arr.transpose(0, 2, 1).reshape(B * d, n_x, 1)
+    num_samples, n_x, d = arr.shape
+    return arr.transpose(0, 2, 1).reshape(num_samples * d, n_x, 1)
 
 
 def evaluate_sample(
@@ -294,19 +286,24 @@ def evaluate_sample(
     run_sett: Dict[str, Any],
     writer=None,
     key_suffix: str = "",
-) -> None:
+):
     """Full evaluation of generated samples against true test data.
 
     Mirrors the structure of ``evaluate_all_with_one_batch`` in utils_OT but
     operates on two distributions — x_gen vs x_true — instead of four.
 
     Args:
-        samples_raw:      Generated samples, shape ``(N, C, n_x, d)``.
+        samples_raw:      Generated samples, shape ``(num_samples, C, n_x, d)``.
         true_data_model:  Data-model object with ``x_test`` and ``y_test``.
         data_sett:        Data-specific settings dict (e.g. ``run_sett["data_KS"]``).
         run_sett:         Full run-settings dict.
         writer:           Optional metric writer (e.g. WandbWriter).
         key_suffix:       String appended to all logged metric keys and file names.
+
+    Returns:
+        Tuple ``(corr_gen, metrics_dict)`` where ``corr_gen`` is the
+        adjacent-correlation array for the generated samples and
+        ``metrics_dict`` is a dict of scalar metric values.
     """
     from src.optimal_transport.utils_OT import (
         _w2_1d_sq,
@@ -329,7 +326,7 @@ def evaluate_sample(
     generation_type = str(run_sett_global["generation_type"])
     n_x = int(data_sett["n_x"])
 
-    N, C, _, d = samples_raw.shape
+    num_samples, C, _, d = samples_raw.shape
 
     x_test_arr = np.asarray(true_data_model.x_test)
 
@@ -353,7 +350,7 @@ def evaluate_sample(
     else:
         y = np.asarray(true_data_model.y_test)[:num_conditionings]
 
-    samples_nc = np.asarray(samples_raw).reshape(N * C, n_x, d)
+    samples_nc = np.asarray(samples_raw).reshape(num_samples * C, n_x, d)
     samples_flat = _flatten_channels(samples_nc)
     samples_4d = samples_flat[:, np.newaxis, :, :]
 
@@ -368,7 +365,7 @@ def evaluate_sample(
         downsampling_type=str(data_sett.get("downsampling_type", "select")),
     )
 
-    samples_for_var = jnp.asarray(samples_raw).reshape(N, C, n_x * d, 1)
+    samples_for_var = jnp.asarray(samples_raw).reshape(num_samples, C, n_x * d, 1)
     sample_variability = calculate_sample_variability(samples_for_var)
 
     w2_list = [_w2_1d_sq(gen_flat[:, t], ref_flat[:, t]) for t in range(n_x)]
@@ -479,8 +476,8 @@ def evaluate_all_samples(
 
     Expects h5 files in ``work_dir`` (with optional ``run_id_suffix``):
       - ``samples_unconditional{run_id_suffix}.h5``
-      - ``samples_wan_conditional_biased{run_id_suffix}.h5``
-      - ``samples_wan_conditional_debiased{run_id_suffix}.h5``
+      - ``samples_conditional_biased{run_id_suffix}.h5``
+      - ``samples_conditional_debiased{run_id_suffix}.h5``
 
     Writes a combined CSV to ``work_dir/eval_all/eval_metrics_all.csv`` and a
     multi-series adjacent-correlation plot to ``work_dir/eval_all/adjcorr/``.
@@ -501,8 +498,8 @@ def evaluate_all_samples(
 
     configs = [
         ("unconditional", False, None),
-        ("wan_conditional", False, "biased"),
-        ("wan_conditional", True, "debiased"),
+        ("conditional", False, "biased"),
+        ("conditional", True, "debiased"),
     ]
 
     all_rows = []
@@ -613,15 +610,18 @@ def plot_marginal_densities(
     with channel mean  mu_i = -2 + 4 * i / (d - 1)  (0-indexed channel i).
 
     Args:
-        samples_dict: Mapping label -> array of shape ``(N, C, n_x, d)``.
+        samples_dict: Mapping label -> array of shape ``(num_samples, C, n_x, d)``.
         run_sett:     Full run-settings dict.
         data_sett:    Data-specific settings dict.
-        x_test:       Test data array of shape ``(N, n_x, d)`` or ``(N, C, n_x, d)``;
+        x_test:       Test data array of shape ``(num_ref, n_x, d)`` or ``(num_ref, C, n_x, d)``;
                       used as empirical ground truth for non-AR models.
         writer:       Optional metric writer.
         key_suffix:   String appended to output file names.
         out_name:     Base name for output files.
-        positions:    Spatial indices to plot; defaults to ``[0, 100, 200, n_x-1]``.
+        positions:    Spatial indices to plot; defaults to ``[18, 36, 54]`` for
+                      KS or ``[0, 50, 100, 150, 200, 250, n_x-1]`` otherwise.
+        labels:       Display labels for each entry in ``samples_dict``; defaults
+                      to the dict keys.
 
     Returns:
         List of saved file paths, one per channel.

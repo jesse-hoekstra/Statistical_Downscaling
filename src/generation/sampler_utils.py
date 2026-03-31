@@ -2,8 +2,7 @@
 
 This module provides thin wrappers around Swirl-Dynamics samplers to:
 - draw unconditional samples,
-- draw WAN-style conditionally guided samples via a post-processed denoiser,
-- draw PDE-guided samples using a learned log h guidance function (NewDriftSdeSampler).
+- draw conditionally guided samples via a post-processed denoiser.
 """
 
 import jax
@@ -14,7 +13,6 @@ from swirl_dynamics.lib import solvers as solver_lib
 from src.generation.swirl_dynamics_new_guidance.averaging_guidance import (
     InfillFromBlockAverages,
 )
-from src.generation.swirl_dynamics_new_sampler.samplers import NewDriftSdeSampler
 
 
 def sample_unconditional(
@@ -38,7 +36,7 @@ def sample_unconditional(
         run_sett: Settings dictionary.
 
     Returns:
-        Array of generated samples with shape `(num_samples, num_conditions, d, 1)`.
+        Array of generated samples with shape `(num_samples, num_conditions, n_x, d)`.
     """
     sampler = dfn_lib.SdeSampler(
         input_shape=(data_sett["n_x"], data_sett["d"]),
@@ -67,7 +65,7 @@ def sample_unconditional(
     return samples_all
 
 
-def sample_wan_guided(
+def sample_conditional(
     diffusion_scheme,
     denoise_fn,
     y_bar: jnp.ndarray,
@@ -76,7 +74,7 @@ def sample_wan_guided(
     data_sett,
     run_sett,
 ):
-    """Generate WAN-style conditionally guided samples.
+    """Generate conditionally guided samples.
 
     Applies the LinearConstraint post-processing transform to the denoiser to
     enforce C' x ≈ y' during sampling. Guidance strength is read from
@@ -85,14 +83,15 @@ def sample_wan_guided(
     Args:
         diffusion_scheme: Diffusion schedule object.
         denoise_fn: Callable denoiser inference function.
-        y_bar: Conditioning LR observations with shape `(num_conditions, d_prime, 1)`
-          or `(num_conditions, d_prime)`.
+        y_bar: Conditioning LR observations with shape `(num_conditions, n_y, d)`.
         rng_key: JAX PRNG key.
         num_samples: How many independent draws per condition.
+        data_sett: Data settings dictionary (must contain 'n_x', 'n_y', 'd',
+            'downsampling_type').
         run_sett: Settings dictionary.
 
     Returns:
-        Array with shape `(num_samples, num_conditions, d, 1)`.
+        Array with shape `(num_samples, num_conditions, n_x, d)`.
     """
     downsampling_factor = int(data_sett["n_x"] // data_sett["n_y"])
     downsampling_type = str(data_sett["downsampling_type"])
@@ -130,69 +129,6 @@ def sample_wan_guided(
     generate_one = jax.jit(
         lambda k: sampler.generate(
             rng=k, guidance_inputs=guidance_inputs, num_samples=int(y_bar.shape[0])
-        )
-    )
-
-    def loop_body(carry, key):
-        samples = generate_one(key)
-        return carry, samples
-
-    _, samples_all = jax.lax.scan(loop_body, init=None, xs=keys)
-    return samples_all
-
-
-def sample_pde_guided(
-    diffusion_scheme,
-    denoise_fn,
-    pde_solver,
-    rng_key: jax.Array,
-    samples_per_condition: int,
-    y: jnp.ndarray,
-):
-    """Generate samples guided by a learned PDE-based guidance function.
-
-    Uses `NewDriftSdeSampler` with `guidance_fn=pde_solver.grad_log_h_batched`,
-    which supplies per-condition gradients of log h(t, x, y) to guide the SDE.
-
-    Args:
-        diffusion_scheme: Diffusion schedule object.
-        denoise_fn: Callable denoiser inference function.
-        pde_solver: Instance exposing `grad_log_h_batched` and run settings.
-        rng_key: JAX PRNG key.
-        samples_per_condition: Number of independent draws for each condition.
-        y: Conditioning LR observations of shape `(num_conditions, d_prime[, 1])`.
-
-    Returns:
-        Array with shape `(samples_per_condition, num_conditions, d, 1)`.
-    """
-    num_conditionings = int(pde_solver.num_conditionings)
-    if y.shape[0] != num_conditionings:
-        raise ValueError(
-            f"`y` must have leading size {num_conditionings}, but got {y.shape[0]}"
-        )
-    sampler = NewDriftSdeSampler(
-        input_shape=(
-            pde_solver.run_sett_global["n_x"],
-            pde_solver.run_sett_global["d"],
-        ),
-        integrator=solver_lib.EulerMaruyama(),
-        tspan=dfn_lib.exponential_noise_decay(
-            diffusion_scheme,
-            num_steps=int(pde_solver.run_sett_exp_tspan["num_steps"]),
-            end_sigma=float(pde_solver.run_sett_exp_tspan["end_sigma"]),
-        ),
-        scheme=diffusion_scheme,
-        denoise_fn=denoise_fn,
-        guidance_transforms=(),
-        guidance_fn=pde_solver.grad_log_h_batched,
-        apply_denoise_at_end=True,
-        return_full_paths=False,
-    )
-
-    keys = jax.random.split(rng_key, samples_per_condition)
-    generate_one = jax.jit(
-        lambda k: sampler.generate(
-            rng=k, num_samples=num_conditionings, guidance_inputs={"y": y}
         )
     )
 

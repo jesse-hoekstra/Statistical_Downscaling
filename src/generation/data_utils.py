@@ -3,8 +3,9 @@
 This module provides:
 - get_raw_datasets: reads HF/LF/HR/LR arrays from an HDF5 file and
   constructs a stride-based low-resolution view of the HF data.
-- get_ks_dataset: builds a deterministic, infinite tf.data pipeline that yields
+- get_dataset: builds a deterministic, infinite tf.data pipeline that yields
   batched samples with a reproducible circular shift augmentation.
+- get_train_test: reshapes and splits raw HDF5 arrays into train/test sets.
 """
 
 import h5py
@@ -47,7 +48,7 @@ def get_dataset(
     encourage translation robustness during training.
 
     Args:
-        u_samples: Array of shape (N, L, 1) containing KS fields.
+        u_samples: Array of shape (num_samples, L, 1) containing KS fields.
         split: One of
             - "train": use full set;
             - "train[:p%]": take prefix p percent;
