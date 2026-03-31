@@ -185,7 +185,7 @@ python src/generation/main_GEN.py --config src/generation/settings_GEN.yaml
 |---|---|
 | `denoiser_utils.py` | UNet construction, VP diffusion scheme, Orbax-based checkpointing, EMA restore |
 | `sampler_utils.py` | `sample_unconditional`, `sample_conditional` |
-| `utils_metrics.py` | Constraint RMSE, KLD (KDE), MELR (spectral energy mismatch), 1-Wasserstein, sample variability |
+| `utils_metrics.py` | Constraint RMSE, KLD (KDE), 1-Wasserstein, sample variability, ... |
 | `data_utils.py` | HDF5 KS dataset loader, deterministic `tf.data` training/eval pipelines |
 
 ---
