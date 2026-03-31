@@ -175,7 +175,7 @@ python src/generation/main_GEN.py --config src/generation/settings_GEN.yaml
 | File | Description |
 |---|---|
 | `alg1_OT.py` | `ConditionalSplineCouplingFlow` (RQS masked coupling), `RhoNet` (time/state-dependent Gaussian copula), `NormalizingFlowModel`, `PolicyGradient` trainer with EMA, control variates, and configurable β/lr schedules |
-| `dgp_OT.py` | `TrueDataModelUnimodal`, `TrueDataModelBimodal` (synthetic), `KSTrueDataModel`, `ARTrueDataModel` — all produce paired trajectories *(y, y′)* |
+| `dgp_OT.py` | `TrueDataModelUnimodal`, `TrueDataModelBimodal` (synthetic), `KSTrueDataModel`, `ARTrueDataModel`  |
 | `preprocessing_OT.py` | `DataNormalizer`: stream-estimated statistics, winsor-clipped normalisation, log-det tracking for change-of-variables |
 | `utils_OT.py` | Adjacent correlation plots, trajectory comparisons, KS evaluator, metrics CSV I/O |
 
