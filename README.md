@@ -1,6 +1,6 @@
 # Time Series Statistical Downscaling: Optimal Transport (OT) and Diffusion Models
 
-A JAX-based implementation of statistical downscaling for time-series data, combining **optimal transport** (OT) and **diffusion-based generation** (GEN) into a two-stage pipeline. Applied to autoregressive (AR) processes.
+A JAX-based implementation of time series statistical downscaling, combining **optimal transport** (OT) and **diffusion-based generation** (GEN) into a two-stage pipeline. Applied to autoregressive (AR) processes. Supporting codebase to the paper: .....
 
 ---
 
