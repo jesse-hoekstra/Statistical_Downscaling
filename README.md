@@ -8,7 +8,7 @@ A JAX-based implementation of time series statistical downscaling, combining **o
 
 The pipeline consists of two complementary components:
 
-1. **Optimal Transport** (`src/optimal_transport/`) — Performs bicausal Optimal Transport (OT) for low-resolution conditional trajectories *y* to its high-fidelity counterpart *y′* via normalizing flows trained with a policy gradient objective.
+1. **Optimal Transport** (`src/optimal_transport/`) — Performs bicausal Optimal Transport (OT) for low-resolution conditional trajectories *y* and its high-fidelity counterpart *y′* via normalizing flows trained with a policy gradient objective.
 2. **Generation** (`src/generation/`) — Trains a VP-diffusion denoiser (UNet) on high-resolution data, with optional guidance at sampling time: unconditional, constraint-aware (using OT output for debiased conditioning).
 
 ---
