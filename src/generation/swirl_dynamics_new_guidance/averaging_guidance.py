@@ -30,7 +30,7 @@ class InfillFromBlockAverages:
     the block mean is constrained to equal the corresponding entry in
     `guidance_inputs['observed_averages']`.
 
-    This mirrors the structure of InfillFromSlices exactly:
+    This mirrors the structure of InfillFromSlices in spirit:
       1. Gradient step: penalise ||C*denoised - y||^2 where C is block-averaging.
       2. Projection:    shift each block uniformly so its mean equals y[i].
 
@@ -56,7 +56,21 @@ class InfillFromBlockAverages:
     def __call__(
         self, denoise_fn: DenoiseFn, guidance_inputs: ArrayMapping
     ) -> DenoiseFn:
-        """Constructs a denoise function guided by block-average constraints."""
+        """Wraps a denoise function with block-average guidance.
+
+        Applies a gradient step penalising deviation from the observed block
+        averages, then projects each block so its mean exactly matches the
+        corresponding entry in ``guidance_inputs['observed_averages']``.
+
+        Args:
+            denoise_fn: Base denoising function ``(x, sigma, cond) -> denoised``.
+            guidance_inputs: Must contain ``'observed_averages'`` with shape
+                ``(batch, n_y, d)``.
+
+        Returns:
+            A guided denoising function with the same signature as
+            ``denoise_fn``.
+        """
         k = self.downsampling_factor
 
         def _guided_denoise(
