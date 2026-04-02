@@ -16,7 +16,7 @@ The pipeline consists of two complementary components:
 ## Project Structure
 
 ```
-Statistical_Downscaling/
+statistical_downscaling/
 ├── src/
 │   ├── generation/                     # Diffusion-based generation pipeline
 │   │   ├── main_GEN.py                 # Entry point
@@ -37,40 +37,43 @@ Statistical_Downscaling/
 │       └── utils_OT.py                 # Plotting & diagnostics
 ├── main_GEN/                           # Generation run outputs
 ├── main_OT/                            # OT run outputs
-
-
-└── scripts/
-    └── pre_commit.sh                   # Code formatting hook
+├── scripts/
+│   └── pre_commit.sh                   # Code formatting hook
+├── pyproject.toml                      # Package installation
+├── LICENSE                             # MIT license
+└── CITATION.cff                        # Citation metadata
 ```
 
 ---
 
 ## Installation
 
-The two pipelines have separate dependencies and virtual environments.
-
 ### Prerequisites
 
 - Python 3.12.8
 - GPU with CUDA (recommended)
 
-### Optimal Transport
+Clone the repository and install from the root:
 
 ```bash
-cd src/optimal_transport
-python -m venv .venv_OT
-source .venv_OT/bin/activate          # Windows: .venv_OT\Scripts\activate
-pip install -r requirements_OT.txt
+git clone https://github.com/jesse-hoekstra/statistical_downscaling.git
+cd statistical_downscaling
 ```
 
-### Generation
+The two pipelines have separate dependencies. Install only what you need:
 
 ```bash
-cd src/generation
-python -m venv .venv_GEN
-source .venv_GEN/bin/activate          # Windows: .venv_GEN\Scripts\activate
-pip install -r requirements_GEN.txt
+# Optimal Transport pipeline
+pip install -e ".[ot]"
+
+# Generation pipeline
+pip install -e ".[gen]"
+
+# Both
+pip install -e ".[all]"
 ```
+
+For exact dependency versions used in the paper, see `src/optimal_transport/requirements_OT.txt` and `src/generation/requirements_GEN.txt`.
 
 ---
 
@@ -198,5 +201,11 @@ A pre-commit hook is provided for automated code formatting:
 echo '#!/bin/sh\nsource scripts/pre_commit.sh' > .git/hooks/pre-commit
 chmod +x .git/hooks/pre-commit
 ```
+
+---
+
+## Citation
+
+If you use this code in your research, please cite our work. Click the **Cite this repository** button on the GitHub sidebar, or use the metadata in [CITATION.cff](CITATION.cff).
 
 

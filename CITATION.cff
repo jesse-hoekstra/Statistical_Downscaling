@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "Statistical Downscaling: Bi-Causal Optimal Transport and Diffusion Models"
+authors:
+  - family-names: Cao
+    given-names: Haoyang
+  - family-names: Hoekstra
+    given-names: Jesse
+  - family-names: Xu
+    given-names: Renyuan
+  - family-names: Xu
+    given-names: Yumin
+  - family-names: Zhang
+    given-names: Ruixun
+license: MIT
+year: 2026
+# TODO: Add the following fields once the paper is published:
+# doi: <DOI>
+# url: <repository URL>
+# preferred-citation:
+#   type: article
+#   title: <paper title>
+#   authors: <same as above>
+#   journal: <journal name>
+#   year: <year>
+#   doi: <DOI>

@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "statistical-downscaling"
+version = "0.1.0"
+description = "Bi-causal optimal transport and diffusion-based statistical downscaling for time series"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [
+    { name = "Haoyang Cao" },
+    { name = "Jesse Hoekstra" },
+    { name = "Renyuan Xu" },
+    { name = "Yumin Xu" },
+    { name = "Ruixun Zhang" },
+]
+
+# Shared core dependencies
+dependencies = [
+    "jax>=0.7",
+    "jaxlib>=0.7",
+    "numpy>=2.0",
+    "scipy>=1.16",
+    "matplotlib>=3.10",
+    "optax>=0.2",
+    "chex>=0.1",
+    "orbax-checkpoint>=0.11",
+    "PyYAML>=6.0",
+    "ml_dtypes>=0.5",
+    "typing_extensions>=4.0",
+]
+
+[project.optional-dependencies]
+# pip install -e ".[ot]"
+ot = [
+    "dm-haiku>=0.0.15",
+    "distrax>=0.1",
+    "flax>=0.12",
+    "scikit-learn>=1.7",
+    "wandb>=0.23",
+    "tensorflow>=2.20",
+    "tensorflow-probability>=0.26",
+    "tabulate>=0.9",
+]
+
+# pip install -e ".[gen]"
+gen = [
+    "flax>=0.11",
+    "jax-cfd>=0.2",
+    "h5py>=3.14",
+    "tqdm>=4.67",
+    "tensorflow>=2.20",
+    "plotly>=6.0",
+]
+
+# pip install -e ".[all]"  — installs everything
+all = [
+    "statistical-downscaling[ot]",
+    "statistical-downscaling[gen]",
+]
+
+# pip install -e ".[dev]"
+dev = [
+    "statistical-downscaling[all]",
+    "pytest>=8.0",
+    "black>=24.0",
+    "isort>=5.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
