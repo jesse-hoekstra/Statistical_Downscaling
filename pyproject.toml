@@ -64,9 +64,8 @@ all = [
 # pip install -e ".[dev]"
 dev = [
     "statistical-downscaling[all]",
-    "pytest>=8.0",
     "black>=24.0",
-    "isort>=5.0",
+    "autoflake>=2.0",
 ]
 
 [tool.setuptools.packages.find]
