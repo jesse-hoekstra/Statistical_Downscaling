@@ -1,6 +1,6 @@
-# Time Series Statistical Downscaling: Optimal Transport (OT) and Diffusion Models
+# Time Series Statistical Downscaling: Optimal Transport (OT) (\cite{paper}) and Diffusion Models
 
-A JAX-based implementation of time series statistical downscaling, combining **optimal transport** (OT) and **diffusion-based generation** (GEN) into a two-stage pipeline. Applied to autoregressive (AR) processes. Supporting codebase to the paper: .....
+A JAX-based implementation of time series statistical downscaling, combining bi-causal **optimal transport** (OT) (\cite{paper}) and **diffusion-based generation** (GEN) into a two-stage pipeline. Applied to autoregressive (AR) processes. Supporting codebase to the paper: \cite{paper}, including all other synthetic experiments. 
 
 ---
 
@@ -8,8 +8,8 @@ A JAX-based implementation of time series statistical downscaling, combining **o
 
 The pipeline consists of two complementary components:
 
-1. **Optimal Transport** (`src/optimal_transport/`) — Performs bicausal Optimal Transport (OT) for low-resolution conditional trajectories *y* and its high-fidelity counterpart *y′* via normalizing flows trained with a policy gradient objective.
-2. **Generation** (`src/generation/`) — Trains a VP-diffusion denoiser (UNet) on high-resolution data, with optional guidance at sampling time: unconditional, constraint-aware (using OT output for debiased conditioning).
+1. **Optimal Transport** (`src/optimal_transport/`) — Performs the bi-causal Optimal Transport (OT) methodology as per \cite{paper}, as an computationally efficient stochastic-optimization approach for computing bi-causal OT couplings with general, including continuous, marginals.
+2. **Generation** (`src/generation/`) — Trains a VP denoiser (UNet) on high-resolution data, with optional guidance at sampling time: unconditional, constraint-aware (using OT output for debiased conditioning).
 
 ---
 
@@ -24,7 +24,7 @@ Statistical_Downscaling/
 │   │   ├── requirements_GEN.txt        # Dependencies
 │   │   ├── data_utils.py               # HDF5 data loading & tf.data pipelines
 │   │   ├── denoiser_utils.py           # UNet, VP diffusion scheme, training
-│   │   ├── sampler_utils.py            # Unconditional 
+│   │   ├── sampler_utils.py            # Unconditional or conditional sampling
 │   │   ├── utils_metrics.py            # Evaluation metrics
 │   │   └── swirl_dynamics_new_guidance/
 │   └── optimal_transport/              # Optimal transport pipeline
@@ -39,7 +39,6 @@ Statistical_Downscaling/
 ├── main_OT/                            # OT run outputs
 
 
-├── aggregate_metrics.py                # Aggregate metrics across parallel runs
 └── scripts/
     └── pre_commit.sh                   # Code formatting hook
 ```
@@ -64,8 +63,6 @@ source .venv_OT/bin/activate          # Windows: .venv_OT\Scripts\activate
 pip install -r requirements_OT.txt
 ```
 
-Key dependencies: JAX 0.8.0, Flax 0.12.0, Haiku 0.0.15, Distrax 0.1.7, Optax 0.2.6, TensorFlow 2.20.0, Orbax 0.11.28, W&B 0.23.0.
-
 ### Generation
 
 ```bash
@@ -87,7 +84,7 @@ Run the OT training and transport:
 python src/optimal_transport/main_OT.py --config src/optimal_transport/settings_OT.yaml
 ```
 
-This trains a `PolicyGradient` model for `num_iterations` steps and saves checkpoints under `main_OT/<run_name>/`. Optionally set `transform_mode: True` in the config to load a saved policy and generate transported samples *y → y′*.
+This trains a `OT map` for `num_iterations` steps and saves checkpoints under `main_OT/<run_name>/`. Optionally set `transform_mode: True` in the config to load a saved OT map and obtain debiased samples *y → y′* from biased inputs.
 
 ### Generation
 
@@ -119,7 +116,7 @@ global:
 python src/generation/main_GEN.py --config src/generation/settings_GEN.yaml
 ```
 
-Samples are written to `main_GEN/<run_name>/samples_<generation_type>.h5`.
+Samples are written to `main_GEN/<run_name>/samples_<generation_type>_<optional_input_type>.h5`.
 
 | `generation_type` | Description |
 |---|---|
@@ -131,7 +128,7 @@ Samples are written to `main_GEN/<run_name>/samples_<generation_type>.h5`.
 ```yaml
 global:
   mode: eval
-  generation_type: conditional   # must match the saved sample file
+  generation_type: conditional   
 ```
 
 ```bash
@@ -185,7 +182,7 @@ python src/generation/main_GEN.py --config src/generation/settings_GEN.yaml
 |---|---|
 | `denoiser_utils.py` | UNet construction, VP diffusion scheme, Orbax-based checkpointing, EMA restore |
 | `sampler_utils.py` | `sample_unconditional`, `sample_conditional` |
-| `utils_metrics.py` | Constraint RMSE, KLD (KDE), 1-Wasserstein, sample variability, ... |
+| `utils_metrics.py` | Constraint RMSE, KLD, 1-Wasserstein, sample variability, ... |
 | `data_utils.py` | HDF5 KS dataset loader, deterministic `tf.data` training/eval pipelines |
 
 ---
