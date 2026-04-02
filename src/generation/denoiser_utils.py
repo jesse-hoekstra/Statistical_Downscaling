@@ -1,10 +1,12 @@
+import logging
+
+import jax
 import jax.numpy as jnp
+import optax
+import orbax.checkpoint as ocp
+from swirl_dynamics import templates
 from swirl_dynamics.lib import diffusion as dfn_lib
 from swirl_dynamics.projects import probabilistic_diffusion as dfn
-import optax
-import jax
-from swirl_dynamics import templates
-import orbax.checkpoint as ocp
 
 
 def _as_tuple(value):
@@ -43,12 +45,14 @@ def vp_linear_beta_schedule(
     beta_max = float(
         beta_max if beta_max is not None else run_sett["train_denoiser"]["beta_max"]
     )
-    bdiff = beta_max - beta_min
-    forward = lambda t: jnp.sqrt(jnp.expm1(0.5 * bdiff * t * t + beta_min * t))
+    beta_diff = beta_max - beta_min
+
+    def forward(t):
+        return jnp.sqrt(jnp.expm1(0.5 * beta_diff * t * t + beta_min * t))
 
     def inverse(sig):
         L = jnp.log1p(jnp.square(sig))
-        return (-beta_min + jnp.sqrt(beta_min**2 + 2.0 * bdiff * L)) / bdiff
+        return (-beta_min + jnp.sqrt(beta_min**2 + 2.0 * beta_diff * L)) / beta_diff
 
     return dfn_lib.InvertibleSchedule(forward, inverse)
 
@@ -110,8 +114,10 @@ def restore_denoise_fn(checkpoint_dir: str, denoiser_model):
     trained_state = dfn.DenoisingModelTrainState.restore_from_orbax_ckpt(
         checkpoint_dir, step=None
     )
-    print(
-        f"Loaded denoiser checkpoint from: {checkpoint_dir} (step {int(trained_state.step)})"
+    logging.info(
+        "Loaded denoiser checkpoint from: %s (step %d)",
+        checkpoint_dir,
+        int(trained_state.step),
     )
     return dfn.DenoisingTrainer.inference_fn_from_state_dict(
         trained_state, use_ema=True, denoiser=denoiser_model
@@ -195,16 +201,11 @@ def run_training(
     save_interval_steps: int,
     max_to_keep: int,
 ):
-    """Train the model with standard progress and checkpoint callbacks.
+    """Train the model with progress bar and checkpoint callbacks.
 
-    Thin wrapper around `templates.run_train` that runs training in batches of
-    `metric_aggregation_steps`, aggregates metrics within each batch, and logs
-    them via `metric_writer`. If `eval_dataloader` is provided, evaluation runs
-    every `eval_every_steps` steps. Note that `eval_every_steps` must be an
-    integer multiple of `metric_aggregation_steps` (otherwise a `ValueError` is
-    raised by the underlying template). By default, when an evaluation loader is
-    given, the template performs a single sanity evaluation batch before
-    training starts.
+    Thin wrapper around `templates.run_train`. Metrics are aggregated over
+    `metric_aggregation_steps` steps and logged via `metric_writer`.
+    `eval_every_steps` must be a multiple of `metric_aggregation_steps`.
 
     Args:
         train_dataloader: Infinite/long iterator of training batches.
@@ -214,17 +215,11 @@ def run_training(
         metric_writer: Writer for scalar metrics.
         metric_aggregation_steps: Number of steps over which to aggregate metrics.
         eval_dataloader: Iterator of evaluation batches (optional).
-        eval_every_steps: Evaluation frequency in steps; must divide by
+        eval_every_steps: Evaluation frequency in steps; must be a multiple of
             `metric_aggregation_steps`.
         num_batches_per_eval: Number of batches per evaluation run.
         save_interval_steps: Checkpoint save frequency.
         max_to_keep: Maximum number of checkpoints to retain.
-
-    Returns:
-        None.
-
-    Notes:
-        Adds `TqdmProgressBar` and `TrainStateCheckpoint` callbacks.
     """
     return templates.run_train(
         train_dataloader=train_dataloader,
