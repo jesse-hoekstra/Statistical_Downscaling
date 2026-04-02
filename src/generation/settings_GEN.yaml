@@ -43,8 +43,8 @@ train_denoiser:
   clip_min: 1e-3 
 UNET:
   out_channels: 2
-  num_channels: 32,64 #32,64,128
-  downsample_ratio: 2,2 #2,2,2
+  num_channels: 32,64 #add 128 for n_x=96 KS example
+  downsample_ratio: 2,2 #add 2 for n_x=96 KS example
   num_blocks: 6
   noise_embed_dim: 128
   use_attention: True
