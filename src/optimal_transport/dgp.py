@@ -1,15 +1,17 @@
 """Data-generation primitives for optimal transport experiments (JAX).
 
-This module provides small stochastic state-transition models that generate
-paired trajectories (y, y') for use in statistical downscaling experiments.
-There are two variants:
-  - TrueDataModelUnimodal: single-mode noise model
+This module provides stochastic state-transition models and data-backed
+models that generate paired trajectories (y, y') for use in statistical
+downscaling experiments. Five models are provided:
+
+  - TrueDataModelUnimodal: single-mode noise model.
       Transition per dimension i:
         y_t[i] = base_means[i] + 0.5 * y_{t-1}[i] + eps_t[i],
         where eps_t[i] = [eps_y, eps_y'] with
           eps_y ~ Normal(0, 0.5^2),
           eps_y' = 4 * Beta(2, 5) - 1.5.
-  - TrueDataModelBimodal: per-dimension fixed-mode (selector) mixture
+
+  - TrueDataModelBimodal: per-dimension fixed-mode (selector) mixture.
       A Bernoulli selector s[i] = (s_y, s_y') is sampled once per dimension
       and held fixed across time. Then:
         y_t[i] = base_means[i] + 0.5 * y_{t-1}[i] + eps_t[i],
@@ -20,6 +22,17 @@ There are two variants:
           For y':
             if s_y':  eps_y' = 2.5 * Beta(5, 2) + 0.5
             else:     eps_y' ~ Normal(-1.5, 0.5^2)
+
+  - RobustHedgingModel: independent Gaussian random-walk benchmark with a
+      closed-form Wasserstein-2 optimal cost.
+
+  - KSTrueDataModel: data-backed model loaded from Kuramoto-Sivashinsky HDF5
+      simulation data, pairing low-fidelity/low-resolution (LFLR) with
+      high-fidelity/high-resolution (HFHR) trajectories.
+
+  - ARTrueDataModel: data-backed AR model generated on-the-fly from
+      TrueDataModelUnimodal, pairing subsampled (y) with block-averaged (y')
+      versions of the same trajectory.
 
 All sampling routines are JIT-compiled with JAX and operate on PRNG keys.
 """
@@ -36,10 +49,7 @@ _LOG2PI = jnp.asarray(jnp.log(2.0 * jnp.pi), dtype=jnp.float32)
 
 
 def _logpdf_normal(x: jnp.ndarray, mean: jnp.ndarray, std: jnp.ndarray) -> jnp.ndarray:
-    """
-    x, mean, std.
-    return logpdf.
-    """
+    """Return elementwise log-PDF of Normal(mean, std^2) evaluated at x."""
     std = jnp.maximum(std, jnp.asarray(1e-12, dtype=jnp.float32))
     z = (x - mean) / std
     return -0.5 * _LOG2PI - jnp.log(std) - 0.5 * (z * z)
@@ -48,10 +58,16 @@ def _logpdf_normal(x: jnp.ndarray, mean: jnp.ndarray, std: jnp.ndarray) -> jnp.n
 def _logpdf_beta_affine(
     x: jnp.ndarray, a: float, b: float, scale: float, shift: float
 ) -> jnp.ndarray:
-    """
-    x = scale * U + shift,  U ~ Beta(a,b)
-    support: x in [shift, shift+scale] (assuming scale>0)
-    return elementwise logpdf in x-space.
+    """Return elementwise log-PDF of the affine-transformed Beta X = scale*U + shift, U ~ Beta(a, b).
+
+    Args:
+        x: Observed values; support is [shift, shift + scale] for scale > 0.
+        a, b: Beta shape parameters.
+        scale: Multiplicative scale applied to the Beta draw.
+        shift: Additive shift applied after scaling.
+
+    Returns:
+        Elementwise log-PDF in x-space; -inf outside the support.
     """
     a = jnp.asarray(a, dtype=jnp.float32)
     b = jnp.asarray(b, dtype=jnp.float32)
@@ -128,11 +144,13 @@ class TrueDataModelUnimodal:
 
         Args:
             key: JAX PRNG key used to drive all randomness.
+            return_latents: If True, also return a dummy latent array of zeros.
 
         Returns:
-            Tuple (y, y_prime):
+            Tuple (y, y_prime) or (y, y_prime, latents) if return_latents is True:
                 - y: Array with shape (N+1, d, 1)
                 - y_prime: Array with shape (N+1, d, 1)
+                - latents: Zero array with shape (d, 2), dtype bool (dummy).
         """
         key, k0 = jax.random.split(key)
         val0 = self._step_dist(k0, jnp.zeros((self.d, 2), dtype=jnp.float32))
@@ -154,6 +172,16 @@ class TrueDataModelUnimodal:
     def log_prob_y_cond_steps(
         self, y: jnp.ndarray, latents=None, mode: str = "oracle"
     ) -> jnp.ndarray:
+        """Compute the per-step log-likelihood of y under the Normal noise model.
+
+        Args:
+            y: Observed trajectory, shape (B, N, d, 1) or (N, d, 1).
+            latents: Unused; kept for API consistency.
+            mode: Unused; kept for API consistency.
+
+        Returns:
+            Log-likelihood summed over spatial dimensions, shape (B, N).
+        """
         if y.ndim == 3:
             y = y[None, ...]
         B, N_len, d_prime, _ = y.shape
@@ -169,6 +197,16 @@ class TrueDataModelUnimodal:
     def log_prob_yp_cond_steps(
         self, yp: jnp.ndarray, latents=None, mode: str = "oracle"
     ) -> jnp.ndarray:
+        """Compute the per-step log-likelihood of y' under the Beta noise model.
+
+        Args:
+            yp: Observed trajectory, shape (B, N, d, 1) or (N, d, 1).
+            latents: Unused; kept for API consistency.
+            mode: Unused; kept for API consistency.
+
+        Returns:
+            Log-likelihood summed over spatial dimensions, shape (B, N).
+        """
         if yp.ndim == 3:
             yp = yp[None, ...]
         B, N_len, d_prime, _ = yp.shape
@@ -253,11 +291,13 @@ class TrueDataModelBimodal:
 
         Args:
             key: JAX PRNG key used to drive all randomness.
+            return_latents: If True, also return the per-dimension selector array.
 
         Returns:
-            Tuple (y, y_prime):
+            Tuple (y, y_prime) or (y, y_prime, selector) if return_latents is True:
                 - y: Array with shape (N+1, d, 1)
                 - y_prime: Array with shape (N+1, d, 1)
+                - selector: Boolean array with shape (d, 2), the fixed mode selector.
         """
         key, k_sel, k0 = jax.random.split(key, 3)
         selector = jax.random.bernoulli(k_sel, p=0.5, shape=(self.d, 2))
@@ -281,6 +321,17 @@ class TrueDataModelBimodal:
     def log_prob_y_cond_steps(
         self, y: jnp.ndarray, latents=None, mode: str = "oracle"
     ) -> jnp.ndarray:
+        """Compute the per-step log-likelihood of y given the mode selector.
+
+        Args:
+            y: Observed trajectory, shape (B, N, d, 1) or (N, d, 1).
+            latents: Boolean selector array with shape (d, 2) or (B, d, 2).
+                selector[:, 0] determines the noise mode for y per dimension.
+            mode: Must be 'oracle'; marginal evaluation is not supported.
+
+        Returns:
+            Log-likelihood summed over spatial dimensions, shape (B, N).
+        """
         if y.ndim == 3:
             y = y[None, ...]
         B, N_len, d_prime, _ = y.shape
@@ -288,10 +339,10 @@ class TrueDataModelBimodal:
 
         mode = str(mode).lower()
         if mode != "oracle":
-            raise ValueError("For bimodal you requested oracle mode only.")
+            raise ValueError("Only 'oracle' mode is supported for the bimodal model.")
 
         if latents is None:
-            raise ValueError("Oracle bimodal KL needs latents/selector.")
+            raise ValueError("Bimodal oracle mode requires a latents (selector) array.")
 
         if latents.ndim == 2:
             latents = jnp.broadcast_to(latents[None, ...], (B, d_prime, 2))
@@ -312,6 +363,17 @@ class TrueDataModelBimodal:
     def log_prob_yp_cond_steps(
         self, yp: jnp.ndarray, latents=None, mode: str = "oracle"
     ) -> jnp.ndarray:
+        """Compute the per-step log-likelihood of y' given the mode selector.
+
+        Args:
+            yp: Observed trajectory, shape (B, N, d, 1) or (N, d, 1).
+            latents: Boolean selector array with shape (d, 2) or (B, d, 2).
+                selector[:, 1] determines the noise mode for y' per dimension.
+            mode: Must be 'oracle'; marginal evaluation is not supported.
+
+        Returns:
+            Log-likelihood summed over spatial dimensions, shape (B, N).
+        """
         if yp.ndim == 3:
             yp = yp[None, ...]
         B, N_len, d_prime, _ = yp.shape
@@ -319,10 +381,10 @@ class TrueDataModelBimodal:
 
         mode = str(mode).lower()
         if mode != "oracle":
-            raise ValueError("For bimodal you requested oracle mode only.")
+            raise ValueError("Only 'oracle' mode is supported for the bimodal model.")
 
         if latents is None:
-            raise ValueError("Oracle bimodal KL needs latents/selector.")
+            raise ValueError("Bimodal oracle mode requires a latents (selector) array.")
 
         if latents.ndim == 2:
             latents = jnp.broadcast_to(latents[None, ...], (B, d_prime, 2))
@@ -342,11 +404,27 @@ class TrueDataModelBimodal:
 
 
 class RobustHedgingModel:
-    """
-    Gaussian random-walk benchmark.
+    """Independent Gaussian random-walk model for robust hedging benchmarks.
+
+    Each of y and y' evolves as a zero-drift Brownian motion with per-dimension
+    volatilities sigma_x and sigma_y respectively. Because the two processes are
+    independent, the model admits a closed-form optimal transport cost via
+    `optimal_cost_closed_form`.
     """
 
     def __init__(self, run_sett: Dict[str, Any]):
+        """Initialize model parameters from the settings dictionary.
+
+        Args:
+            run_sett: Dictionary with required sub-keys:
+                - 'global': must contain 'N' (int, number of steps) and
+                  'd' (int, number of spatial dimensions).
+                - 'robust_hedging': must contain 'dt' (float, time-step size),
+                  'S0_y' (float or array, initial value of y),
+                  'S0_yp' (float or array, initial value of y'),
+                  'sigma_y' (float or array, volatility of y),
+                  'sigma_yp' (float or array, volatility of y').
+        """
         run_sett_global = run_sett["global"]
         run_sett_robust_hedging = run_sett["robust_hedging"]
         self.N = int(run_sett_global["N"])
@@ -371,6 +449,15 @@ class RobustHedgingModel:
         self.sigma_y = _as_vec(run_sett_robust_hedging["sigma_yp"])
 
     def _step_dist(self, k, prev_val: jnp.ndarray) -> jnp.ndarray:
+        """Sample one Gaussian random-walk step for both y and y'.
+
+        Args:
+            k: JAX PRNG key for this step.
+            prev_val: Array with shape (d, 2), previous [y, y'] values.
+
+        Returns:
+            Array with shape (d, 2), the next [y, y'] state.
+        """
         k1, k2 = jax.random.split(k, 2)
         eps1 = jax.random.normal(k1, shape=(self.d,), dtype=jnp.float32)
         eps2 = jax.random.normal(k2, shape=(self.d,), dtype=jnp.float32)
@@ -384,6 +471,7 @@ class RobustHedgingModel:
 
     @partial(jax.jit, static_argnums=(0, 2))
     def sample_true_trajectory(self, key, return_latents: bool = False):
+        """Generate a full (y, y') trajectory from the Gaussian random walk."""
         val0 = jnp.stack([self._x0_vec, self._y0_vec], axis=1)
 
         def step(carry, k):
@@ -404,6 +492,16 @@ class RobustHedgingModel:
     def log_prob_y_cond_steps(
         self, y: jnp.ndarray, latents=None, mode: str = "oracle"
     ) -> jnp.ndarray:
+        """Compute the per-step log-likelihood of y under the Gaussian random-walk model.
+
+        Args:
+            y: Observed trajectory, shape (B, N, d, 1) or (N, d, 1).
+            latents: Unused; kept for API consistency.
+            mode: Unused; kept for API consistency.
+
+        Returns:
+            Log-likelihood summed over spatial dimensions, shape (B, N).
+        """
         if y.ndim == 3:
             y = y[None, ...]
         B, N_len, d_prime, _ = y.shape
@@ -422,6 +520,16 @@ class RobustHedgingModel:
     def log_prob_yp_cond_steps(
         self, yp: jnp.ndarray, latents=None, mode: str = "oracle"
     ) -> jnp.ndarray:
+        """Compute the per-step log-likelihood of y' under the Gaussian random-walk model.
+
+        Args:
+            yp: Observed trajectory, shape (B, N, d, 1) or (N, d, 1).
+            latents: Unused; kept for API consistency.
+            mode: Unused; kept for API consistency.
+
+        Returns:
+            Log-likelihood summed over spatial dimensions, shape (B, N).
+        """
         if yp.ndim == 3:
             yp = yp[None, ...]
         B, N_len, d_prime, _ = yp.shape
@@ -438,6 +546,11 @@ class RobustHedgingModel:
         return jnp.sum(lp, axis=(2, 3))
 
     def optimal_cost_closed_form(self) -> float:
+        """Return the closed-form optimal transport cost between the y and y' marginals.
+
+        Returns:
+            Scalar optimal transport cost as a Python float.
+        """
         d0 = self._x0_vec - self._y0_vec
         d0_sq = jnp.sum(d0 * d0)
 
@@ -480,6 +593,16 @@ class KSTrueDataModel:
     """
 
     def __init__(self, run_sett: dict):
+        """Load and prepare KS simulation data from the HDF5 file specified in run_sett.
+
+        Args:
+            run_sett: Dictionary with required sub-key 'data_KS' containing:
+                - 'd' (int): Number of spatial dimensions.
+                - 'data_file_name' (str): Path to the HDF5 file with 'LFLR' and 'HFHR' datasets.
+                - 'training_samples' (int): Number of HFHR samples to use for training.
+                - 'n_x', 'n_y' (int): Time-series lengths for HFHR and LFLR respectively.
+                - 'num_gen_samples', 'num_conditionings' (int): Controls the test-set size.
+        """
         self.run_sett = run_sett
         self.run_sett_data_KS = run_sett["data_KS"]
         self.d = int(run_sett["data_KS"]["d"])
@@ -584,16 +707,17 @@ class KSTrueDataModel:
         )
 
     def sample_true_trajectory(self, key):
-        """Sample a single (y, y') pair uniformly from the training set.
+        """Sample a single (y, y') pair uniformly at random from the training set.
 
-        Compatible with ``jax.vmap`` and ``jax.jit``.
+        y and yp are sampled independently, so they need not come from the same
+        original trajectory. Compatible with ``jax.vmap`` and ``jax.jit``.
 
         Args:
             key: JAX PRNG key.
 
         Returns:
-            y:  shape (N+1, d, 1) — LFLR observation.
-            yp: shape (N+1, d, 1) — temporally-downsampled HFHR field.
+            y:  LFLR observation, shape (n_y, d, 1).
+            yp: Temporally-downsampled HFHR field, shape (n_y, d, 1).
         """
         key_y, key_yp = jax.random.split(key)
         idx_y = jax.random.randint(key_y, shape=(), minval=0, maxval=self._n_train_y)
@@ -615,8 +739,24 @@ class KSTrueDataModel:
 
 
 class ARTrueDataModel:
+    """Data-backed AR model generated on-the-fly from TrueDataModelUnimodal.
+
+    Trajectories are generated at initialisation using TrueDataModelUnimodal.
+    The paired (y, y') are derived from the same high-resolution trajectory:
+    y is obtained by subsampling every y_factor steps, and y' by block-averaging
+    consecutive windows of length y_factor.
+    """
 
     def __init__(self, run_sett: dict):
+        """Generate and store AR training and test trajectories.
+
+        Args:
+            run_sett: Dictionary with required sub-keys:
+                - 'global': must contain 'seed' (int).
+                - 'data_AR': must contain 'd', 'test_samples', 'y_nsamples',
+                  'x_nsamples', 'n_x', 'n_y' (all int), and optionally
+                  'phi' (float, AR coefficient, default 0.5).
+        """
         self.run_sett = run_sett
         self.seed = run_sett["global"]["seed"]
         self.d = int(run_sett["data_AR"]["d"])
@@ -630,7 +770,7 @@ class ARTrueDataModel:
         self._load_data()
 
     def _load_data(self) -> None:
-        """Load HDF5 file and prepare jnp train/test arrays."""
+        """Generate train and test trajectories using TrueDataModelUnimodal and store as jnp arrays."""
 
         sett_ar = copy.deepcopy(self.run_sett)
         sett_ar["global"]["N"] = self.n_x - 1
@@ -672,8 +812,8 @@ class ARTrueDataModel:
             return_latents: If True, also return a dummy latent array.
 
         Returns:
-            y:  shape (N+1, d, 1) — LFLR observation.
-            yp: shape (N+1, d, 1) — temporally-downsampled HFHR field.
+            y:  Subsampled trajectory, shape (n_y, d, 1).
+            yp: Block-averaged trajectory, shape (n_y, d, 1).
         """
         key_y, key_yp = jax.random.split(key)
         idx_y = jax.random.randint(key_y, shape=(), minval=0, maxval=self._n_train_y)
