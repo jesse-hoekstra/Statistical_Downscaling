@@ -33,11 +33,10 @@ import jax.lax as lax
 import haiku as hk
 import distrax
 import optax
-from typing import Tuple
+from typing import Optional, Tuple
 from functools import partial
 import os
 import orbax.checkpoint as ocp
-from typing import Optional
 
 from preprocessing import DataNormalizer
 
@@ -80,7 +79,8 @@ class ConditionerMLP(hk.Module):
 
     Given concatenated input `[x, context]`, outputs per-dimension parameters for
     a rational-quadratic spline: for each dimension we emit
-    `3 * num_bins + 1` values (bin widths (K), bin heights (K), knot slopes ((K-1)(internal)+2(boundary))).
+    ``3 * num_bins + 1`` values: ``K`` bin widths, ``K`` bin heights, and ``K+1`` knot slopes
+    (K-1 internal knots plus 2 boundary knots).
     """
 
     def __init__(self, name: str, d: int, num_bins: int, hidden_size: int):
@@ -228,6 +228,7 @@ class NormalizingFlowModel:
     """
 
     def __init__(self, run_sett: dict, true_data_model):
+        """Initialise the model, normalizer, and Haiku-transformed functions."""
         self.run_sett = run_sett
         self.run_sett_global = run_sett["global"]
         self.run_sett_marginal_flow = run_sett["marginal_flow"]
@@ -373,6 +374,7 @@ class NormalizingFlowModel:
         return logp_steps
 
     def _logprob_steps_y_one_traj_norm(self, y_flow, y_traj):
+        """Compute per-step marginal log-probabilities of ``y`` for a single normalized trajectory."""
         d, N_len = self.d, self.N_len
         y_vec = jnp.squeeze(y_traj, -1)
 
@@ -388,6 +390,7 @@ class NormalizingFlowModel:
         return logp_steps
 
     def _logprob_steps_yp_one_traj_norm(self, yp_flow, yp_traj):
+        """Compute per-step marginal log-probabilities of ``yp`` for a single normalized trajectory."""
         d, N_len = self.d, self.N_len
         yp_vec = jnp.squeeze(yp_traj, -1)
 
@@ -403,6 +406,7 @@ class NormalizingFlowModel:
         return logp_steps
 
     def _logprob_steps_y_batch_norm_impl(self, y_z):
+        """Haiku-transformed: vmap per-step ``y`` log-probs over a batch of normalized trajectories."""
         y_flow, _, _ = self._make_modules()
 
         def one(y_one):
@@ -411,6 +415,7 @@ class NormalizingFlowModel:
         return hk.vmap(one, split_rng=False)(y_z)
 
     def _logprob_steps_yp_batch_norm_impl(self, yp_z):
+        """Haiku-transformed: vmap per-step ``yp`` log-probs over a batch of normalized trajectories."""
         _, yp_flow, _ = self._make_modules()
 
         def one(yp_one):
@@ -419,9 +424,11 @@ class NormalizingFlowModel:
         return hk.vmap(one, split_rng=False)(yp_z)
 
     def _logprob_total_y_batch_norm_impl(self, y_z):
+        """Haiku-transformed: sum per-step ``y`` log-probs over time for each normalized trajectory."""
         return jnp.sum(self._logprob_steps_y_batch_norm_impl(y_z), axis=1)
 
     def _logprob_total_yp_batch_norm_impl(self, yp_z):
+        """Haiku-transformed: sum per-step ``yp`` log-probs over time for each normalized trajectory."""
         return jnp.sum(self._logprob_steps_yp_batch_norm_impl(yp_z), axis=1)
 
     def _sample_batch_norm_impl(self, keys: jax.Array):
@@ -455,15 +462,19 @@ class NormalizingFlowModel:
         return self._hk_sample_norm.apply(params, keys=keys)
 
     def logprob_steps_y_batch_norm(self, params, y_z):
+        """Compute per-step log-probabilities of ``y`` for a batch of normalized trajectories."""
         return self._hk_logprob_steps_y_norm.apply(params, y_z=y_z)
 
     def logprob_steps_yp_batch_norm(self, params, yp_z):
+        """Compute per-step log-probabilities of ``yp`` for a batch of normalized trajectories."""
         return self._hk_logprob_steps_yp_norm.apply(params, yp_z=yp_z)
 
     def logprob_total_y_batch_norm(self, params, y_z):
+        """Compute total log-probabilities of ``y`` (summed over time) for a batch of normalized trajectories."""
         return self._hk_logprob_total_y_norm.apply(params, y_z=y_z)
 
     def logprob_total_yp_batch_norm(self, params, yp_z):
+        """Compute total log-probabilities of ``yp`` (summed over time) for a batch of normalized trajectories."""
         return self._hk_logprob_total_yp_norm.apply(params, yp_z=yp_z)
 
     def logprob_steps_batch_norm(
@@ -479,16 +490,19 @@ class NormalizingFlowModel:
         return self._hk_logprob_total_norm.apply(params, y_z=y_z, yp_z=yp_z)
 
     def _log_det_y_per_t(self):
+        """Per-step log-determinant of the ``y`` normalizer; shape ``(N+1,)``."""
         if (not self.use_data_normalization) or (self.normalizer is None):
             return jnp.zeros((self.N_len,))
         return jnp.sum(jnp.log(self.normalizer.std_y), axis=(1, 2))
 
     def _log_det_yp_per_t(self):
+        """Per-step log-determinant of the ``yp`` normalizer; shape ``(N+1,)``."""
         if (not self.use_data_normalization) or (self.normalizer is None):
             return jnp.zeros((self.N_len,))
         return jnp.sum(jnp.log(self.normalizer.std_yp), axis=(1, 2))
 
     def logprob_steps_y_batch_original(self, params, y):
+        """Per-step log-probabilities of ``y`` in ORIGINAL space, corrected for normalization."""
         if not self.use_data_normalization:
             y_z = y
         else:
@@ -500,6 +514,7 @@ class NormalizingFlowModel:
         return logq_z - ld[None, :]
 
     def logprob_steps_yp_batch_original(self, params, yp):
+        """Per-step log-probabilities of ``yp`` in ORIGINAL space, corrected for normalization."""
         if not self.use_data_normalization:
             yp_z = yp
         else:
@@ -511,6 +526,7 @@ class NormalizingFlowModel:
         return logq_z - ld[None, :]
 
     def sample_trajectory(self, key, params: hk.Params):
+        """Sample a single trajectory ``(y, yp)`` in ORIGINAL space given explicit params."""
         if hasattr(key, "keys") and (not isinstance(params, dict)):
             key, params = params, key
         y_z, yp_z, _ = self.sample_batch_norm(params, jax.random.split(key, 1))
@@ -554,13 +570,19 @@ class NormalizingFlowModel:
     def transport_y_to_yp(self, y_traj: jnp.ndarray, params: hk.Params, key: jax.Array):
         """Transport a single ORIGINAL-space trajectory y -> yp via learned flow.
 
-        Args:
-            y_traj: Array with shape (N+1, d) or (N+1, d, 1) in ORIGINAL space.
-            params: Haiku params pytree for the model (matching init).
-            key: JAX PRNG key for sampling the copula noise.
+        Parameters
+        ----------
+        y_traj : jax.Array
+            Shape ``(N+1, d)`` or ``(N+1, d, 1)`` in ORIGINAL space.
+        params : hk.Params
+            Haiku params pytree for the model (matching init).
+        key : jax.Array
+            JAX PRNG key for sampling the copula noise.
 
-        Returns:
-            yp: Array with shape matching y_traj input in ORIGINAL space.
+        Returns
+        -------
+        jax.Array
+            ``yp`` with shape matching ``y_traj`` in ORIGINAL space.
         """
         squeeze = y_traj.ndim == 2
         if squeeze:
@@ -593,6 +615,7 @@ class PolicyGradient:
     """
 
     def __init__(self, run_sett: dict, true_data_model, normalizing_flow_model=None):
+        """Initialise the trainer, optimizer, schedules, and EMA state."""
         self.run_sett = run_sett
         self.run_sett_global = run_sett["global"]
         self.run_sett_beta = run_sett["beta_schedule"]
@@ -683,7 +706,7 @@ class PolicyGradient:
         step_decay_boundaries = self.run_sett_lr["step_decay_boundaries"]
         step_decay_factor = float(self.run_sett_lr["step_decay_factor"])
         mode_type = str(self.run_sett_lr["type"]).lower()
-        warmup = warmup = optax.linear_schedule(
+        warmup = optax.linear_schedule(
             init_value=init_value,
             end_value=peak_value,
             transition_steps=max(warmup_steps, 1),
@@ -730,9 +753,7 @@ class PolicyGradient:
         )
 
     def _fit_baseline_per_n(self, phi: jnp.ndarray, target: jnp.ndarray, ridge: float):
-        """
-        phi: (B,N+1,p), target: (B,N+1) -> w: (N+1,p)
-        """
+        """Fit a ridge-regression baseline per time step; ``phi`` ``(B,N+1,p)``, returns weights ``(N+1,p)``."""
         B, N_len, p = phi.shape
 
         def solve_one(n):
@@ -934,6 +955,7 @@ class PolicyGradient:
         }
 
     def sample_trajectory(self, key: jax.Array, params: Optional[hk.Params] = None):
+        """Sample a single trajectory ``(y, yp)`` in ORIGINAL space; params default to EMA if enabled."""
         if params is None:
             params = self.get_eval_params_trees()
         y_z, yp_z, _ = self.model.sample_batch_norm(params, jax.random.split(key, 1))
@@ -946,10 +968,21 @@ class PolicyGradient:
         num: int,
         params: Optional[hk.Params] = None,
     ):
-        """
-        Returns trajectories in ORIGINAL space:
-          y:  (num, N+1, d, 1)
-          yp: (num, N+1, d, 1)
+        """Sample a batch of trajectories in ORIGINAL space.
+
+        Parameters
+        ----------
+        key : jax.Array
+            JAX PRNG key.
+        num : int
+            Number of trajectories to sample.
+        params : hk.Params, optional
+            Model parameters; defaults to EMA params if enabled, else current params.
+
+        Returns
+        -------
+        tuple[jax.Array, jax.Array]
+            ``(y, yp)`` each of shape ``(num, N+1, d, 1)`` in ORIGINAL space.
         """
         if params is None:
             params = self.get_eval_params_trees()
@@ -960,6 +993,22 @@ class PolicyGradient:
         return y, yp
 
     def joint_log_prob_batch(self, y, yp, params: Optional[hk.Params] = None):
+        """Compute joint log-probabilities log p(y, yp) for a batch in ORIGINAL space.
+
+        Parameters
+        ----------
+        y : jax.Array
+            Batch of ``y`` trajectories, shape ``(B, N+1, d, 1)`` in ORIGINAL space.
+        yp : jax.Array
+            Batch of ``yp`` trajectories, shape ``(B, N+1, d, 1)`` in ORIGINAL space.
+        params : hk.Params, optional
+            Model parameters; defaults to EMA params if enabled, else current params.
+
+        Returns
+        -------
+        jax.Array
+            Log-probabilities of shape ``(B,)``.
+        """
         if params is None:
             params = self.get_eval_params_trees()
         y_z, yp_z = self.model.normalizer.transform("normalize", y, yp)
@@ -989,8 +1038,8 @@ class PolicyGradient:
         manager.save(step=current_step, items=payload)
         try:
             manager.wait_until_finished()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[PolicyGradient] Warning: checkpoint saving raised: {e}")
         print(
             f"[PolicyGradient] State saved to: {os.path.join(abs_dir, str(current_step))}"
         )
