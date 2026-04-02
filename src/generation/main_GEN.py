@@ -1,3 +1,14 @@
+"""
+Entry point for the generative model pipeline.
+
+Supports four modes controlled by ``run_sett["global"]["mode"]``:
+
+- ``train``   – trains the score-based denoiser.
+- ``sample``  – draws samples (unconditional or conditional) using a trained checkpoint.
+- ``eval``    – evaluates a single set of saved samples.
+- ``eval_all``– evaluates all generation types together in double precision.
+"""
+
 import os
 import sys
 import jax
@@ -155,13 +166,11 @@ if use_wandb:
         active=True,
     )
 else:
-    print(
-        "[INFO] use_wandb=False -> disable ALL logging/plotting to avoid local memory pressure."
-    )
+    print("use_wandb=False: logging and plotting disabled.")
 
 
-def _save_samples_h5(path, samples, *, y_bar=None, run_settings=None, rng_key=None):
-    """Save only the samples to an HDF5 file as dataset 'samples'."""
+def _save_samples_h5(path, samples):
+    """Save samples to an HDF5 file under the dataset key ``'samples'``."""
     arr = np.asarray(samples)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with h5py.File(path, "w") as f:
@@ -177,6 +186,7 @@ def _load_samples_h5(path, *, as_jax=True):
 
 
 def _build_true_data_model(run_sett: dict):
+    """Instantiate the true data model (KS or AR) specified in the global config."""
     name = str(run_sett["global"]["data_model"]).strip().lower()
     from src.optimal_transport.dgp_OT import KSTrueDataModel, ARTrueDataModel
 
@@ -188,6 +198,11 @@ def _build_true_data_model(run_sett: dict):
 
 
 def main():
+    """Run the pipeline in the mode specified by ``run_sett["global"]["mode"]``.
+
+    Builds the true data model, then dispatches to training, sampling, or
+    evaluation logic.
+    """
     true_data_model = _build_true_data_model(run_sett)
 
     DATA_STD = true_data_model.x_train_eval.std()
@@ -302,8 +317,6 @@ def main():
                 data_sett=data_sett,
                 run_sett=run_sett,
             )
-            print(jnp.mean(samples))
-            print(samples.std())
             _save_samples_h5(sample_file, samples)
         elif generation_type == "conditional":
             samples = sample_conditional(
@@ -315,8 +328,6 @@ def main():
                 data_sett=data_sett,
                 run_sett=run_sett,
             )
-            print(samples.std())
-            print(samples.shape)
             _save_samples_h5(sample_file, samples)
     elif mode == "eval":
         jax.config.update("jax_enable_x64", True)
