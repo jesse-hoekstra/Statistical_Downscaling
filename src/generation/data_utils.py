@@ -11,7 +11,6 @@ This module provides:
 import h5py
 import jax.numpy as jnp
 import tensorflow as tf
-from typing import Optional
 
 
 def get_raw_datasets(file_name, ds_x=4):
@@ -29,7 +28,7 @@ def get_raw_datasets(file_name, ds_x=4):
         - x: Spatial grid.
         - t: Temporal grid.
     """
-    with h5py.File(file_name, "r+") as f1:
+    with h5py.File(file_name, "r") as f1:
         u_LFLR = f1["LFLR"][()]
         u_HFHR = f1["HFHR"][()]
         t = f1["t"][()]
@@ -39,9 +38,7 @@ def get_raw_datasets(file_name, ds_x=4):
     return u_HFHR, u_LFLR, u_HFLR, x, t
 
 
-def get_dataset(
-    u_samples: jnp.ndarray, split: str, batch_size: int, seed: Optional[int] = None
-):
+def get_dataset(u_samples: jnp.ndarray, split: str, batch_size: int, seed: int):
     """Create a deterministic, infinite NumPy iterator of batched KS samples.
 
     Each element is circularly shifted by a reproducible, per-index offset to
@@ -81,7 +78,7 @@ def get_dataset(
     global_seed = tf.cast(int(seed), tf.int32)
     ds = ds.enumerate()
 
-    def _seeded_random_roll_map_fn(index, data_dict):
+    def _apply_roll(index, data_dict):
         sample = data_dict["x"]
         sample_len = tf.shape(sample)[0]
         idx_mod = tf.math.floormod(index, tf.cast(total_len, tf.int64))
@@ -96,18 +93,39 @@ def get_dataset(
         rolled_sample = tf.roll(sample, shift=shift, axis=0)
         return {"x": rolled_sample}
 
-    ds = ds.map(_seeded_random_roll_map_fn, num_parallel_calls=tf.data.AUTOTUNE)
+    ds = ds.map(_apply_roll, num_parallel_calls=tf.data.AUTOTUNE)
     ds = ds.batch(batch_size)
     ds = ds.prefetch(tf.data.AUTOTUNE)
     ds = ds.as_numpy_iterator()
     return ds
 
 
-def get_train_test(u_HFHR, u_LFLR, split, settings):
-    u_HFHR_train_eval = u_HFHR[:-split]
-    u_LFLR_train_eval = u_LFLR[:-split]
-    u_HFHR_test = u_HFHR[-split:]
-    u_LFLR_test = u_LFLR[-split:]
+def get_train_test(u_HFHR, u_LFLR, n_test, settings):
+    """Split and reshape HF/LF arrays into block-structured train and test sets.
+
+    Each array of shape ``(n_samples, T, X)`` is first split along the sample axis
+    into train (first ``n_samples - n_test``) and test (last ``n_test``) subsets.
+    The spatial axis ``X`` is then partitioned into non-overlapping blocks of size
+    ``d``, and the first ``n_x`` (for HF) or ``n_y`` (for LF) time steps are
+    retained. Each spatial block becomes an independent sample, so the output
+    sample count is ``n_samples_split * (X // d)``.
+
+    Args:
+        u_HFHR: High-fidelity high-resolution array of shape ``(n_samples, T, X_hr)``.
+        u_LFLR: Low-fidelity low-resolution array of shape ``(n_samples, T, X_lr)``.
+        n_test: Number of samples reserved for the test set (taken from the end).
+        settings: Dict with integer keys ``'d'`` (block size), ``'n_x'``
+            (HF time steps to retain), and ``'n_y'`` (LF time steps to retain).
+
+    Returns:
+        A tuple ``(x_train, x_test, y_train, y_test)`` where each array has
+        shape ``(n_samples_split * (X // d), n_t, d)`` with ``n_samples_split``
+        and ``n_t`` determined by the respective split and field (HF or LF).
+    """
+    u_HFHR_train_eval = u_HFHR[:-n_test]
+    u_LFLR_train_eval = u_LFLR[:-n_test]
+    u_HFHR_test = u_HFHR[-n_test:]
+    u_LFLR_test = u_LFLR[-n_test:]
 
     d = int(settings["d"])
     n_x = int(settings["n_x"])
