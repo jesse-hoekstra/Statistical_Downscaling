@@ -1,1 +1,0 @@
-Invalid nan value encountered in the output of a jax.jit function. Calling the de-optimized version.

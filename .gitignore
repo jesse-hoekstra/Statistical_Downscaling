@@ -21,3 +21,4 @@ main_OT/
 Other/
 .Rhistory
 aggregate_metrics.py
+logs/

@@ -1,3 +1,0 @@
-[info] DATA_STD (clamped): 1.3303 (raw std: 1.3303)
-[info] u_HFHR stats: min=-3.54604, max=3.70565, mean=-4.56397e-09, any_nan=False, any_inf=False
-[info] sigma probe: min=0.00654378, max=151.294, any<=0=False, any_nan=False
