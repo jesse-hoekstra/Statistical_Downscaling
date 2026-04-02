@@ -6,7 +6,6 @@ This module provides thin wrappers around Swirl-Dynamics samplers to:
 """
 
 import jax
-import jax.numpy as jnp
 from swirl_dynamics.lib import diffusion as dfn_lib
 from swirl_dynamics.lib import solvers as solver_lib
 
@@ -30,9 +29,11 @@ def sample_unconditional(
         diffusion_scheme: Diffusion schedule object.
         denoise_fn: Callable denoiser inference function.
         rng_key: JAX PRNG key for sampling.
-        num_samples: Number of independent samples to draw.
-        num_conditions: Batch size per draw; matches the number of conditions
-            used in the conditional samplers.
+        num_samples: Number of independent samples to draw (number of PRNG splits).
+        num_conditions: Number of samples generated per PRNG key; set equal to
+            the number of conditioning observations used in conditional sampling
+            so outputs are directly comparable.
+        data_sett: Data settings dictionary (must contain 'n_x' and 'd').
         run_sett: Settings dictionary.
 
     Returns:
@@ -68,7 +69,7 @@ def sample_unconditional(
 def sample_conditional(
     diffusion_scheme,
     denoise_fn,
-    y_bar: jnp.ndarray,
+    y_bar: jax.Array,
     rng_key: jax.Array,
     num_samples: int,
     data_sett,
@@ -76,9 +77,10 @@ def sample_conditional(
 ):
     """Generate conditionally guided samples.
 
-    Applies the LinearConstraint post-processing transform to the denoiser to
-    enforce C' x ≈ y' during sampling. Guidance strength is read from
-    `run_sett["train_denoiser"]["norm_guide_strength"]`.
+    Wraps the denoiser with a guidance transform that enforces the low-resolution
+    constraint during sampling. When `downsampling_type` is ``"average"``,
+    `InfillFromBlockAverages` is used; otherwise `InfillFromSlices` is used.
+    Guidance strength is read from `run_sett["train_denoiser"]["norm_guide_strength"]`.
 
     Args:
         diffusion_scheme: Diffusion schedule object.
