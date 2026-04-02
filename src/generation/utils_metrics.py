@@ -104,7 +104,8 @@ def _single_dimension_calculate_kld(
     Args:
         predicted_samples: Array `(num_samples, 1)` for one dimension.
         reference_samples: Array `(num_ref, 1)` for one dimension.
-        epsilon: Small positive value to avoid division by zero.
+        epsilon: Threshold for masking near-zero reference densities and
+            numerical stability in the log term.
 
     Returns:
         Scalar KLD D_KL(ref || pred) on a common grid.
@@ -194,7 +195,19 @@ def _single_dimension_calculate_wass1(
     reference_samples_1d: jnp.ndarray,
     num_bins: int = 1000,
 ) -> float:
-    """1D Wasserstein-1 on a fixed histogram grid for one dimension."""
+    """1D Wasserstein-1 distance via CDF integration for one dimension.
+
+    Histograms both inputs on a fixed grid ``[-20, 20]``, computes empirical
+    CDFs, then integrates ``|CDF_pred - CDF_ref|`` using the trapezoidal rule.
+
+    Args:
+        predicted_samples_1d: Array ``(num_samples, 1)`` for one dimension.
+        reference_samples_1d: Array ``(num_ref, 1)`` for one dimension.
+        num_bins: Number of histogram bins over ``[-20, 20]``.
+
+    Returns:
+        Scalar Wasserstein-1 distance for this dimension.
+    """
     integration_range = [
         -20.0,
         20.0,
@@ -228,7 +241,16 @@ def _single_calculate_wass1(
     reference_samples: jnp.ndarray,
     num_bins: int = 1000,
 ) -> float:
-    """Average per-dimension 1-Wasserstein distance for a single pool."""
+    """Mean per-dimension Wasserstein-1 distance for a single sample pool.
+
+    Args:
+        predicted_samples: Array ``(num_samples, d, 1)``.
+        reference_samples: Array ``(num_ref, d, 1)``.
+        num_bins: Number of histogram bins passed to the 1D helper.
+
+    Returns:
+        Scalar mean Wasserstein-1 distance averaged over spatial dimensions.
+    """
     if predicted_samples.shape[1] != reference_samples.shape[1]:
         raise ValueError(
             "Predicted and reference samples must have the same number of dimensions (columns)."
@@ -253,7 +275,19 @@ def calculate_wass1_pooled(
     reference_samples: jnp.ndarray,
     num_bins: int = 1000,
 ) -> float:
-    """Wasserstein-1 pooled across samples and conditions (mean over dims)."""
+    """Wasserstein-1 pooled across samples and conditions (mean over dims).
+
+    Merges the ``(num_samples, C)`` axes into a single batch before computing
+    the per-dimension mean Wasserstein-1 distance.
+
+    Args:
+        predicted_samples: Array ``(num_samples, C, d, 1)``.
+        reference_samples: Array ``(num_ref, d, 1)``.
+        num_bins: Number of histogram bins passed to the 1D helper.
+
+    Returns:
+        Scalar mean Wasserstein-1 distance averaged over spatial dimensions.
+    """
     num_pooled_samples = predicted_samples.shape[0] * predicted_samples.shape[1]
     num_dimensions = predicted_samples.shape[2]
     pooled_predicted_samples = jnp.reshape(
@@ -270,10 +304,14 @@ def calculate_wass1_pooled(
 def _flatten_channels(arr: np.ndarray) -> np.ndarray:
     """Flatten the channel dimension into the batch dimension.
 
-    (num_samples, n_x, d) -> (num_samples*d, n_x, 1)
+    Each spatial channel ``d`` becomes an independent sample, preserving the
+    spatial structure along ``n_x``.
 
-    Each spatial channel `d` becomes an independent sample, preserving the
-    spatial structure along `n_x`.
+    Args:
+        arr: Array ``(num_samples, n_x, d)``.
+
+    Returns:
+        Array ``(num_samples * d, n_x, 1)``.
     """
     num_samples, n_x, d = arr.shape
     return arr.transpose(0, 2, 1).reshape(num_samples * d, n_x, 1)
@@ -481,6 +519,16 @@ def evaluate_all_samples(
 
     Writes a combined CSV to ``work_dir/eval_all/eval_metrics_all.csv`` and a
     multi-series adjacent-correlation plot to ``work_dir/eval_all/adjcorr/``.
+
+    Args:
+        work_dir:       Directory containing the sample h5 files and where
+                        per-type subdirectories and outputs are written.
+        true_data_model: Data-model object with ``x_test`` and ``y_test`` attributes.
+        data_sett:      Data-specific settings dict (e.g. ``run_sett["data_KS"]``).
+        run_sett:       Full run-settings dict.
+        writer:         Optional metric writer (e.g. WandbWriter).
+        key_suffix:     String appended to all output file names and metric keys.
+        run_id_suffix:  String appended to the expected h5 input file names.
     """
     import copy
 
