@@ -188,7 +188,7 @@ def _load_samples_h5(path, *, as_jax=True):
 def _build_true_data_model(run_sett: dict):
     """Instantiate the true data model (KS or AR) specified in the global config."""
     name = str(run_sett["global"]["data_model"]).strip().lower()
-    from src.optimal_transport.dgp_OT import KSTrueDataModel, ARTrueDataModel
+    from src.optimal_transport.dgp import KSTrueDataModel, ARTrueDataModel
 
     registry = {"ks": KSTrueDataModel, "ar": ARTrueDataModel}
     if name not in registry:

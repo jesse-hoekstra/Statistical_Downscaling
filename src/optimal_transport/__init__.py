@@ -4,7 +4,7 @@ Models, algorithms, and evaluation utilities for optimal transport-based
 statistical downscaling.
 """
 
-from .alg1_OT import (
+from .alg1 import (
     sinusoidal_time_embedding,
     ConditionerMLP,
     ConditionalSplineCouplingFlow,
@@ -12,15 +12,15 @@ from .alg1_OT import (
     NormalizingFlowModel,
     PolicyGradient,
 )
-from .dgp_OT import (
+from .dgp import (
     TrueDataModelUnimodal,
     TrueDataModelBimodal,
     RobustHedgingModel,
     KSTrueDataModel,
     ARTrueDataModel,
 )
-from .preprocessing_OT import DataNormalizer
-from .utils_OT import (
+from .preprocessing import DataNormalizer
+from .utils import (
     EvalBatch,
     save_eval_batch_npz,
     load_eval_batch_npz,

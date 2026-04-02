@@ -327,7 +327,7 @@ def evaluate_sample(
 ):
     """Full evaluation of generated samples against true test data.
 
-    Mirrors the structure of ``evaluate_all_with_one_batch`` in utils_OT but
+    Mirrors the structure of ``evaluate_all_with_one_batch`` in utils but
     operates on two distributions — x_gen vs x_true — instead of four.
 
     Args:
@@ -343,7 +343,7 @@ def evaluate_sample(
         adjacent-correlation array for the generated samples and
         ``metrics_dict`` is a dict of scalar metric values.
     """
-    from src.optimal_transport.utils_OT import (
+    from src.optimal_transport.utils import (
         _w2_1d_sq,
         _ks_1d,
         _sliced_wasserstein_w2,
@@ -532,7 +532,7 @@ def evaluate_all_samples(
     """
     import copy
 
-    from src.optimal_transport.utils_OT import (
+    from src.optimal_transport.utils import (
         _adjacent_corr_from_trajs_np,
         plot_adjacent_corrs,
         _append_row_csv,

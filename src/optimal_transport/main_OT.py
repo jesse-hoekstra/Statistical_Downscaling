@@ -40,8 +40,8 @@ except ImportError:
                 self.base_writer.close()
 
 
-from src.optimal_transport.utils_OT import evaluate_all_with_one_batch
-from src.optimal_transport.alg1_OT import PolicyGradient
+from src.optimal_transport.utils import evaluate_all_with_one_batch
+from src.optimal_transport.alg1 import PolicyGradient
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -114,7 +114,7 @@ else:
 
 def _build_true_data_model(run_sett: dict):
     name = str(run_sett["global"]["true_data_model"]).strip().lower()
-    from src.optimal_transport.dgp_OT import (
+    from src.optimal_transport.dgp import (
         TrueDataModelUnimodal,
         TrueDataModelBimodal,
         RobustHedgingModel,

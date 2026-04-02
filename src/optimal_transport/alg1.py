@@ -39,7 +39,7 @@ import os
 import orbax.checkpoint as ocp
 from typing import Optional
 
-from preprocessing_OT import DataNormalizer
+from preprocessing import DataNormalizer
 
 
 def sinusoidal_time_embedding(n: jnp.ndarray, dim: int) -> jnp.ndarray:
