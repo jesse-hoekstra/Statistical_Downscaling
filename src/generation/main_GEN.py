@@ -59,7 +59,7 @@ from src.generation.denoiser_utils import (
     build_trainer,
     run_training,
 )
-from src.generation.utils_metrics import evaluate_sample, evaluate_all_samples
+from src.generation.metrics_utils import evaluate_sample, evaluate_all_samples
 from src.generation.data_utils import get_dataset
 from src.generation.sampler_utils import (
     sample_unconditional,

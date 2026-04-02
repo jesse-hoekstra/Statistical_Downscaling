@@ -14,7 +14,7 @@ from .denoiser_utils import (
     run_training,
     vp_linear_beta_schedule,
 )
-from .utils_metrics import (
+from .metrics_utils import (
     calculate_constraint_rmse,
     calculate_sample_variability,
     calculate_kld_pooled,
