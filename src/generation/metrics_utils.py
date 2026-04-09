@@ -99,11 +99,11 @@ def _single_dimension_calculate_kld(
     reference_samples: jnp.ndarray,
     epsilon: float = 1e-10,
 ) -> float:
-    """KL divergence for one spatial dimension using KDE and trapezoidal rule.
+    """KL divergence for one time step using KDE and trapezoidal rule.
 
     Args:
-        predicted_samples: Array `(num_samples, 1)` for one dimension.
-        reference_samples: Array `(num_ref, 1)` for one dimension.
+        predicted_samples: Array `(num_samples, 1)` for one time step.
+        reference_samples: Array `(num_ref, 1)` for one time step.
         epsilon: Threshold for masking near-zero reference densities and
             numerical stability in the log term.
 
@@ -139,15 +139,15 @@ def _single_calculate_kld(
     reference_samples: jnp.ndarray,
     epsilon: float = 1e-10,
 ) -> float:
-    """Sum of 1D KLD over spatial dimensions for a single pool of samples.
+    """Sum of per-time-step KLD for a single pool of samples.
 
     Args:
-        predicted_samples: Array `(num_samples, d, 1)`.
-        reference_samples: Array `(num_ref, d, 1)`.
+        predicted_samples: Array `(num_samples, n_x, 1)`.
+        reference_samples: Array `(num_ref, n_x, 1)`.
         epsilon: Stability constant.
 
     Returns:
-        Scalar sum of per-dimension KLD.
+        Scalar sum of per-time-step KLD.
     """
     if predicted_samples.shape[1] != reference_samples.shape[1]:
         raise ValueError(
@@ -173,12 +173,12 @@ def calculate_kld_pooled(
     Pools the (num_samples, C) axes of predictions into a single batch and computes KLD.
 
     Args:
-        predicted_samples: `(num_samples, C, d, 1)`.
-        reference_samples: `(num_ref, d, 1)`.
+        predicted_samples: `(num_samples, C, n_x, 1)`.
+        reference_samples: `(num_ref, n_x, 1)`.
         epsilon: Stability constant.
 
     Returns:
-        Scalar KLD (sum over dimensions).
+        Scalar KLD (sum over time steps).
     """
     num_pooled_samples = predicted_samples.shape[0] * predicted_samples.shape[1]
     num_dimensions = predicted_samples.shape[2]
@@ -195,14 +195,14 @@ def _single_dimension_calculate_wass1(
     reference_samples_1d: jnp.ndarray,
     num_bins: int = 1000,
 ) -> float:
-    """1D Wasserstein-1 distance via CDF integration for one dimension.
+    """1D Wasserstein-1 distance via CDF integration for one time step.
 
     Histograms both inputs on a fixed grid ``[-20, 20]``, computes empirical
     CDFs, then integrates ``|CDF_pred - CDF_ref|`` using the trapezoidal rule.
 
     Args:
-        predicted_samples_1d: Array ``(num_samples, 1)`` for one dimension.
-        reference_samples_1d: Array ``(num_ref, 1)`` for one dimension.
+        predicted_samples_1d: Array ``(num_samples, 1)`` for one time step.
+        reference_samples_1d: Array ``(num_ref, 1)`` for one time step.
         num_bins: Number of histogram bins over ``[-20, 20]``.
 
     Returns:
@@ -241,15 +241,15 @@ def _single_calculate_wass1(
     reference_samples: jnp.ndarray,
     num_bins: int = 1000,
 ) -> float:
-    """Mean per-dimension Wasserstein-1 distance for a single sample pool.
+    """Mean per-time-step Wasserstein-1 distance for a single sample pool.
 
     Args:
-        predicted_samples: Array ``(num_samples, d, 1)``.
-        reference_samples: Array ``(num_ref, d, 1)``.
+        predicted_samples: Array ``(num_samples, n_x, 1)``.
+        reference_samples: Array ``(num_ref, n_x, 1)``.
         num_bins: Number of histogram bins passed to the 1D helper.
 
     Returns:
-        Scalar mean Wasserstein-1 distance averaged over spatial dimensions.
+        Scalar mean Wasserstein-1 distance averaged over time steps.
     """
     if predicted_samples.shape[1] != reference_samples.shape[1]:
         raise ValueError(
@@ -275,18 +275,18 @@ def calculate_wass1_pooled(
     reference_samples: jnp.ndarray,
     num_bins: int = 1000,
 ) -> float:
-    """Wasserstein-1 pooled across samples and conditions (mean over dims).
+    """Wasserstein-1 pooled across samples and conditions (mean over time steps).
 
     Merges the ``(num_samples, C)`` axes into a single batch before computing
-    the per-dimension mean Wasserstein-1 distance.
+    the per-time-step mean Wasserstein-1 distance.
 
     Args:
-        predicted_samples: Array ``(num_samples, C, d, 1)``.
-        reference_samples: Array ``(num_ref, d, 1)``.
+        predicted_samples: Array ``(num_samples, C, n_x, 1)``.
+        reference_samples: Array ``(num_ref, n_x, 1)``.
         num_bins: Number of histogram bins passed to the 1D helper.
 
     Returns:
-        Scalar mean Wasserstein-1 distance averaged over spatial dimensions.
+        Scalar mean Wasserstein-1 distance averaged over time steps.
     """
     num_pooled_samples = predicted_samples.shape[0] * predicted_samples.shape[1]
     num_dimensions = predicted_samples.shape[2]
