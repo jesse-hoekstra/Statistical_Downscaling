@@ -31,10 +31,10 @@ statistical_downscaling/
 │       ├── main_OT.py                  # Entry point
 │       ├── settings_OT.yaml            # Configuration
 │       ├── requirements_OT.txt         # Dependencies
-│       ├── alg1_OT.py                  # Normalizing flow + policy gradient
-│       ├── dgp_OT.py                   # Synthetic & real data generators
-│       ├── preprocessing_OT.py         # Normalisation / winsorisation
-│       └── utils_OT.py                 # Plotting & diagnostics
+│       ├── alg1.py                     # Normalizing flow + policy gradient
+│       ├── dgp.py                      # Synthetic & real data generators
+│       ├── preprocessing.py            # Normalisation / winsorisation
+│       └── utils.py                    # Plotting & diagnostics
 ├── main_GEN/                           # Generation run outputs
 ├── main_OT/                            # OT run outputs
 ├── scripts/
@@ -60,7 +60,14 @@ git clone https://github.com/jesse-hoekstra/statistical_downscaling.git
 cd statistical_downscaling
 ```
 
-The two pipelines have separate dependencies. Install only what you need:
+Install the swirl-dynamics dependency (used by the generation pipeline):
+
+```bash
+git clone https://github.com/google-research/swirl-dynamics.git swirl_dynamics_main
+pip install -e swirl_dynamics_main
+```
+
+The two pipelines have separate dependencies. Each command automatically installs all required packages — install only what you need:
 
 ```bash
 # Optimal Transport pipeline
@@ -174,10 +181,10 @@ python src/generation/main_GEN.py --config src/generation/settings_GEN.yaml
 
 | File | Description |
 |---|---|
-| `alg1_OT.py` | `ConditionalSplineCouplingFlow` (RQS masked coupling), `RhoNet` (time/state-dependent Gaussian copula), `NormalizingFlowModel`, `PolicyGradient` trainer with EMA, control variates, and configurable β/lr schedules |
-| `dgp_OT.py` | `TrueDataModelUnimodal`, `TrueDataModelBimodal` (synthetic), `KSTrueDataModel`, `ARTrueDataModel`  |
-| `preprocessing_OT.py` | `DataNormalizer`: stream-estimated statistics, winsor-clipped normalisation, log-det tracking for change-of-variables |
-| `utils_OT.py` | Adjacent correlation plots, trajectory comparisons, KS evaluator, metrics CSV I/O |
+| `alg1.py` | `ConditionalSplineCouplingFlow` (RQS masked coupling), `RhoNet` (time/state-dependent Gaussian copula), `NormalizingFlowModel`, `PolicyGradient` trainer with EMA, control variates, and configurable β/lr schedules |
+| `dgp.py` | `TrueDataModelUnimodal`, `TrueDataModelBimodal` (synthetic), `KSTrueDataModel`, `ARTrueDataModel`  |
+| `preprocessing.py` | `DataNormalizer`: stream-estimated statistics, winsor-clipped normalisation, log-det tracking for change-of-variables |
+| `utils.py` | Adjacent correlation plots, trajectory comparisons, KS evaluator, metrics CSV I/O |
 
 ### Generation
 
@@ -185,7 +192,7 @@ python src/generation/main_GEN.py --config src/generation/settings_GEN.yaml
 |---|---|
 | `denoiser_utils.py` | UNet construction, VP diffusion scheme, Orbax-based checkpointing, EMA restore |
 | `sampler_utils.py` | `sample_unconditional`, `sample_conditional` |
-| `utils_metrics.py` | Constraint RMSE, KLD, 1-Wasserstein, sample variability, ... |
+| `metrics_utils.py` | Constraint RMSE, KLD, 1-Wasserstein, sample variability, ... |
 | `data_utils.py` | HDF5 KS dataset loader, deterministic `tf.data` training/eval pipelines |
 
 ---

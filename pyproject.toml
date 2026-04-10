@@ -5,7 +5,7 @@ build-backend = "setuptools.backends.legacy:build"
 [project]
 name = "statistical-downscaling"
 version = "0.1.0"
-description = "Bi-causal optimal transport and diffusion-based statistical downscaling for time series"
+description = "Bicausal optimal transport and diffusion-based statistical downscaling for time series"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
@@ -30,11 +30,13 @@ dependencies = [
     "PyYAML>=6.0",
     "ml_dtypes>=0.5",
     "typing_extensions>=4.0",
+    "h5py>=3.14",
 ]
 
 [project.optional-dependencies]
 # pip install -e ".[ot]"
 ot = [
+    "clu>=0.0.12",
     "dm-haiku>=0.0.15",
     "distrax>=0.1",
     "flax>=0.12",
@@ -47,9 +49,8 @@ ot = [
 
 # pip install -e ".[gen]"
 gen = [
+    "clu>=0.0.12",
     "flax>=0.11",
-    "jax-cfd>=0.2",
-    "h5py>=3.14",
     "tqdm>=4.67",
     "tensorflow>=2.20",
     "plotly>=6.0",
