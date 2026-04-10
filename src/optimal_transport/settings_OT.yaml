@@ -6,7 +6,7 @@ global:
   num_iterations: 100000
   time_emb_dim: 16
   RNG_NAMESPACE: 2026000000
-  train_tranform_mode: "train"
+  train_transform_mode: "train"
   true_data_model: "ar"
 data_AR:
   y_nsamples: 6000

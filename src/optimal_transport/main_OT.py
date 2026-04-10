@@ -1,3 +1,12 @@
+"""
+Entry point for the optimal-transport policy-gradient pipeline.
+
+Supports two modes controlled by ``run_sett["global"]["train_transform_mode"]``:
+
+- ``train``     – runs the policy-gradient training loop.
+- ``transform`` – loads a checkpoint and applies the learned transport map.
+"""
+
 import sys
 import os
 import argparse
@@ -113,6 +122,7 @@ else:
 
 
 def _build_true_data_model(run_sett: dict):
+    """Instantiate the data-generating process specified by ``global.true_data_model``."""
     name = str(run_sett["global"]["true_data_model"]).strip().lower()
     from src.optimal_transport.dgp import (
         TrueDataModelUnimodal,
@@ -136,15 +146,21 @@ def _build_true_data_model(run_sett: dict):
 
 
 def main():
+    """Run the OT policy-gradient pipeline in the mode set by ``global.train_transform_mode``.
+
+    Builds the true data model and dispatches to either the training loop or
+    checkpoint-based transport application.
+    """
     true_data_model = _build_true_data_model(run_sett)
     policy_gradient = PolicyGradient(
         run_sett,
         true_data_model=true_data_model,
     )
-    print(f"Using true_data_model: {run_sett['global']['true_data_model']}")
 
-    N = int(run_sett_global["N"])
-    train_transform_mode = str(run_sett_global["train_tranform_mode"])
+    data_model_name = str(run_sett_global["true_data_model"]).strip().lower()
+    train_transform_mode = str(run_sett_global["train_transform_mode"])
+    print(f"Using true_data_model: {data_model_name}")
+
     num_iterations = int(run_sett_global["num_iterations"])
     RNG_NAMESPACE = int(run_sett_global["RNG_NAMESPACE"])
     key_master = jax.random.PRNGKey(seed)
@@ -188,9 +204,7 @@ def main():
 
                         writer.write_scalars(step=global_step, scalars=scalars)
 
-                    if str(run_sett_global["true_data_model"]).strip().lower() not in {
-                        "ks"
-                    }:
+                    if data_model_name not in {"ks"}:
                         evaluate_all_with_one_batch(
                             policy_gradient=policy_gradient,
                             true_data_model=true_data_model,
@@ -227,8 +241,13 @@ def main():
 
     if train_transform_mode == "transform":
         _, _, y_samples_test = true_data_model.true_trajectory()
-        _data_model = str(run_sett_global["true_data_model"]).strip().lower()
-        _data_sett_key = {"ks": "data_KS", "ar": "data_AR"}.get(_data_model)
+        _data_sett_map = {"ks": "data_KS", "ar": "data_AR"}
+        if data_model_name not in _data_sett_map:
+            raise ValueError(
+                f"transform mode is not supported for data model '{data_model_name}'. "
+                f"Supported: {sorted(_data_sett_map.keys())}"
+            )
+        _data_sett_key = _data_sett_map[data_model_name]
         num_conditionings = int(run_sett[_data_sett_key]["num_conditionings"])
         y_trajs = y_samples_test[:num_conditionings]
         try:
