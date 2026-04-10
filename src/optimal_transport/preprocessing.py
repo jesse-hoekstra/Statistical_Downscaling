@@ -54,30 +54,35 @@ class DataNormalizer:
         self.true_data_model = true_data_model
         self.fitted = False
 
-    def fit(self) -> None:
+    def fit(self) -> "DataNormalizer":
         """Estimate mean/variance/std statistics by streaming over samples.
 
         Sampling procedure:
           - Derive a namespaced key: fold_in(PRNGKey(seed), RNG_NAMESPACE_NORM)
           - Sample `num_samples` trajectories in chunks of size `chunk_size`
           - Accumulate sums and squared-sums for y and y'
-          - If mode == "global": pool across time, elif mode == "time_varying": keep per-time stats
+          - If mode == "global": pool across time; if mode == "time_varying": keep per-time stats
 
         Sets:
           - mu_y, mu_yp: means, shape (N+1, d, 1)
           - var_y, var_yp: variances with floor eps^2, shape (N+1, d, 1)
           - std_y, std_yp: standard deviations, shape (N+1, d, 1)
-          - log_det: sum(log std_y) + sum(log std_yp); useful for change of variables formula due to normalization
+          - log_det_y, log_det_yp: sum of log std over all dimensions and time steps
+          - log_det: log_det_y + log_det_yp; log-Jacobian of the normalization map,
+            used in change-of-variables likelihood corrections
+
+        Returns:
+            self, to allow chaining (e.g. normalizer.fit().transform(...)).
         """
         self.fitted = True
         norm_key = jax.random.fold_in(
             jax.random.PRNGKey(self.seed), self.RNG_NAMESPACE_NORM
         )
 
-        N_len = int(self.N + 1)
-        mode = str(self.mode).lower()
-        num_samples = int(self.num_samples)
-        chunk_size = int(self.chunk_size)
+        N_len = self.N + 1
+        mode = self.mode.lower()
+        num_samples = self.num_samples
+        chunk_size = self.chunk_size
 
         sum_y = sum_yp = sumsq_y = sumsq_yp = None
         total = 0
@@ -154,16 +159,17 @@ class DataNormalizer:
         """
         if not self.use_data_normalization:
             return y, yp
-        assert (
-            self.fitted == True
-        ), "DataNormalizer must be fitted before transforming data"
+        if not self.fitted:
+            raise RuntimeError(
+                "DataNormalizer must be fitted before transforming data."
+            )
         if mode == "normalize":
             y_z = (y - self.mu_y) / self.std_y
             yp_z = (yp - self.mu_yp) / self.std_yp
 
             def _winsor(z: jnp.ndarray) -> jnp.ndarray:
                 """Clip z-scores to [-winsor_clip_z, winsor_clip_z] if enabled."""
-                if self.winsor_clip_z is not None and self.winsor_clip_z > 0.0:
+                if self.winsor_clip_z > 0.0:
                     return jnp.clip(z, -self.winsor_clip_z, self.winsor_clip_z)
                 return z
 
