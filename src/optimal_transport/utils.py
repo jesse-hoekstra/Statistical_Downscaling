@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 
 
 def _append_row_csv(path: str, row: Dict[str, Any]) -> None:
+    """Append a row to a CSV file, creating it with a header if absent."""
     dirn = os.path.dirname(path)
     if dirn:
         os.makedirs(dirn, exist_ok=True)
@@ -62,7 +63,7 @@ def _get_eval_params(policy_gradient):
 def _sample_flow_trajs(policy_gradient, key, num: int, params=None):
     """
     Sample flow trajectories in ORIGINAL space.
-    Return: (y, yp) with shape (num, N_len, d_prime, 1) as JAX arrays.
+    Returns: (y, yp) with shape (num, N_len, d, 1) as JAX arrays.
     """
     num = int(num)
     params = _get_eval_params(policy_gradient) if params is None else params
@@ -82,6 +83,8 @@ def _sample_flow_trajs(policy_gradient, key, num: int, params=None):
 
 @dataclass
 class EvalBatch:
+    """Container for a paired batch of true and flow-sampled trajectories."""
+
     true_y: np.ndarray
     true_yp: np.ndarray
     flow_y: np.ndarray
@@ -91,6 +94,7 @@ class EvalBatch:
 
 
 def save_eval_batch_npz(path: str, batch: EvalBatch, compress: bool = True) -> None:
+    """Save an EvalBatch to a compressed .npz file."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     meta_json = json.dumps(batch.meta, ensure_ascii=False)
     saver = np.savez_compressed if compress else np.savez
@@ -107,6 +111,7 @@ def save_eval_batch_npz(path: str, batch: EvalBatch, compress: bool = True) -> N
 
 
 def load_eval_batch_npz(path: str) -> EvalBatch:
+    """Load an EvalBatch from an .npz file."""
     data = np.load(path, allow_pickle=True)
     meta = json.loads(str(data["meta"][0]))
     lat = data["true_latents"] if ("true_latents" in data.files) else None
@@ -213,6 +218,7 @@ def build_eval_batch(
 
 
 def _w2_1d_sq(x: np.ndarray, y: np.ndarray) -> float:
+    """Squared 1D Wasserstein-2 distance between empirical samples."""
     x = np.asarray(x).reshape(-1)
     y = np.asarray(y).reshape(-1)
     m = min(len(x), len(y))
@@ -224,6 +230,7 @@ def _w2_1d_sq(x: np.ndarray, y: np.ndarray) -> float:
 
 
 def _ks_1d(x: np.ndarray, y: np.ndarray) -> float:
+    """Kolmogorov-Smirnov statistic between two 1D empirical samples."""
     x = np.asarray(x).reshape(-1)
     y = np.asarray(y).reshape(-1)
     m, n = len(x), len(y)
@@ -240,7 +247,7 @@ def _ks_1d(x: np.ndarray, y: np.ndarray) -> float:
 def _stack_traj_features(batch: EvalBatch, B: int) -> Tuple[np.ndarray, np.ndarray]:
     """
     Build trajectory-level feature vectors:
-      x_i = concat(vec(y_i), vec(y'_i)) in R^{N_len*2*d_prime}
+      x_i = concat(vec(y_i), vec(y'_i)) in R^{N_len*2*d}
     Returns:
       X_true: (B, P), X_flow: (B, P)
     """
@@ -331,7 +338,6 @@ def _sliced_wasserstein_w2(
     Aggregate over projections:
       SWD2 = mean_theta SWD2(theta)
       SWD  = sqrt(SWD2)
-      SWD_std = std of per-projection SWD(theta) = sqrt(SWD2(theta))
 
     Returns (SWD, SWD2).
     """
@@ -343,7 +349,7 @@ def _sliced_wasserstein_w2(
     By, _ = Y.shape
     m = min(Bx, By)
     if m <= 1:
-        return float("nan"), float("nan"), float("nan")
+        return float("nan"), float("nan")
 
     X = X[:m]
     Y = Y[:m]
@@ -595,6 +601,7 @@ def save_transition_kl_to_csv(
     step: Optional[int],
     csv_name: str = "transition_kl_steps.csv",
 ) -> str:
+    """Append per-step KL values to a CSV file. Returns the CSV path."""
     base_dir = run_sett.get("work_dir", os.getcwd())
     csv_path = os.path.join(base_dir, str(csv_name))
     T = len(kl_y_t)
@@ -622,6 +629,10 @@ def plot_transition_kl(
     key_suffix: str = "",
     out_name: str = "transition_kl_steps",
 ) -> str:
+    """Plot KL per transition step and save the figure to disk.
+
+    Returns the output file path.
+    """
     run_sett_global = run_sett["global"]
     N = int(run_sett_global["N"])
     N_len = N + 1
@@ -661,6 +672,7 @@ def plot_transition_kl(
 
 
 def _adjacent_corr_from_trajs_np(trajs: np.ndarray, eps: float = 1e-10) -> np.ndarray:
+    """Mean adjacent-step correlation across dimensions, shape (N_len-1,)."""
     x = trajs[..., 0] if trajs.ndim == 4 else trajs
     _, N_len, _ = x.shape
     out = []
@@ -680,6 +692,7 @@ def _adjacent_corr_from_trajs_np(trajs: np.ndarray, eps: float = 1e-10) -> np.nd
 def compute_adjacent_corr_from_batch(
     batch: EvalBatch,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return (flow_y, flow_yp, true_y, true_yp) adjacent-step correlations."""
     return (
         _adjacent_corr_from_trajs_np(batch.flow_y),
         _adjacent_corr_from_trajs_np(batch.flow_yp),
@@ -708,9 +721,10 @@ def plot_adjacent_corrs(
     """Plot adjacent-step correlations for flow vs true trajectories.
 
     Args:
+        run_sett:         Full run-settings dict.
+        corr_flows:       Dict of named correlation arrays (used when ``compare_all_x=True``).
         corr_flow:        Flow (or generated) correlation array.
         corr_true:        True (reference) correlation array.
-        run_sett:         Full run-settings dict.
         corr_flow_prime:  Flow y'-series correlations; required when ``x_series=False``.
         corr_true_prime:  True y'-series correlations; required when ``x_series=False``.
         x_series:         If True, plot two series (gen vs true).
@@ -872,6 +886,10 @@ def plot_hist_from_batch(
     key_suffix: str = "",
     num_bins: int = 50,
 ) -> str:
+    """Plot marginal histograms of y and y' at time t for true vs flow samples.
+
+    Returns the output file path.
+    """
     run_sett_global = run_sett["global"]
     d_prime = int(run_sett_global["d"])
     ty = batch.true_y[:, t, :, 0]
