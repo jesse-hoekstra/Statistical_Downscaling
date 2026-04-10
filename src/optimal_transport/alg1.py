@@ -38,7 +38,7 @@ from functools import partial
 import os
 import orbax.checkpoint as ocp
 
-from preprocessing import DataNormalizer
+from .preprocessing import DataNormalizer
 
 
 def sinusoidal_time_embedding(n: jnp.ndarray, dim: int) -> jnp.ndarray:
