@@ -18,31 +18,31 @@ The pipeline consists of two complementary components:
 ```
 statistical_downscaling/
 ├── src/
-│   ├── generation/                     # Diffusion-based generation pipeline
-│   │   ├── main_GEN.py                 # Entry point
-│   │   ├── settings_GEN.yaml           # Configuration
-│   │   ├── requirements_GEN.txt        # Dependencies
-│   │   ├── data_utils.py               # HDF5 data loading & tf.data pipelines
-│   │   ├── denoiser_utils.py           # UNet, VP diffusion scheme, training
-│   │   ├── sampler_utils.py            # Unconditional or conditional sampling
-│   │   ├── utils_metrics.py            # Evaluation metrics
-│   │   └── swirl_dynamics_new_guidance/     # Block-averaging guidance (extends swirl-dynamics)
-│   │       └── averaging_guidance.py        # InfillFromBlockAverages guidance transform
-│   └── optimal_transport/              # Optimal transport pipeline
-│       ├── main_OT.py                  # Entry point
-│       ├── settings_OT.yaml            # Configuration
-│       ├── requirements_OT.txt         # Dependencies
-│       ├── alg1.py                     # Normalizing flow + policy gradient
-│       ├── dgp.py                      # Synthetic & real data generators
-│       ├── preprocessing.py            # Normalisation / winsorisation
-│       └── utils.py                    # Plotting & diagnostics
-├── main_GEN/                           # Generation run outputs
-├── main_OT/                            # OT run outputs
+│   ├── generation/                       # Diffusion-based generation pipeline
+│   │   ├── main_GEN.py                   # Entry point
+│   │   ├── settings_GEN.yaml             # Configuration
+│   │   ├── requirements_GEN.txt          # Dependencies
+│   │   ├── data_utils.py                 # HDF5 data loading & tf.data pipelines
+│   │   ├── denoiser_utils.py             # UNet, VP diffusion scheme, training
+│   │   ├── sampler_utils.py              # Unconditional or conditional sampling
+│   │   ├── utils_metrics.py              # Evaluation metrics
+│   │   └── swirl_dynamics_new_guidance/  # Block-averaging guidance (extends swirl-dynamics)
+│   │       └── averaging_guidance.py     # InfillFromBlockAverages guidance transform
+│   └── optimal_transport/                # Optimal transport pipeline
+│       ├── main_OT.py                    # Entry point
+│       ├── settings_OT.yaml              # Configuration
+│       ├── requirements_OT.txt           # Dependencies
+│       ├── alg1.py                       # Normalizing flow + policy gradient
+│       ├── dgp.py                        # Synthetic & real data generators
+│       ├── preprocessing.py              # Normalisation / winsorisation
+│       └── utils.py                      # Plotting & diagnostics
+├── main_GEN/                             # Generation run outputs
+├── main_OT/                              # OT run outputs
 ├── scripts/
-│   └── pre_commit.sh                   # Code formatting hook
-├── pyproject.toml                      # Package installation
-├── LICENSE                             # MIT license
-└── CITATION.cff                        # Citation metadata
+│   └── pre_commit.sh                     # Code formatting hook
+├── pyproject.toml                        # Package installation
+├── LICENSE                               # MIT license
+└── CITATION.cff                          # Citation metadata
 ```
 
 ---
