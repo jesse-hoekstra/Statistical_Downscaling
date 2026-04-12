@@ -26,7 +26,8 @@ statistical_downscaling/
 │   │   ├── denoiser_utils.py           # UNet, VP diffusion scheme, training
 │   │   ├── sampler_utils.py            # Unconditional or conditional sampling
 │   │   ├── utils_metrics.py            # Evaluation metrics
-│   │   └── swirl_dynamics_new_guidance/
+│   │   └── swirl_dynamics_new_guidance/     # Block-averaging guidance (extends swirl-dynamics)
+│   │       └── averaging_guidance.py        # InfillFromBlockAverages guidance transform
 │   └── optimal_transport/              # Optimal transport pipeline
 │       ├── main_OT.py                  # Entry point
 │       ├── settings_OT.yaml            # Configuration
