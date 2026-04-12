@@ -194,6 +194,7 @@ python src/generation/main_GEN.py --config src/generation/settings_GEN.yaml
 | `sampler_utils.py` | `sample_unconditional`, `sample_conditional` |
 | `metrics_utils.py` | Constraint RMSE, KLD, 1-Wasserstein, sample variability, ... |
 | `data_utils.py` | HDF5 KS dataset loader, deterministic `tf.data` training/eval pipelines |
+| `swirl_dynamics_new_guidance/averaging_guidance.py` | `InfillFromBlockAverages`: guidance transform for block-averaging constraints; a gradient step corrects the unconstrained space by penalising deviation from observed block means, which are then exactly enforced in the constraint space by uniformly adjusting each block |
 
 ---
 
