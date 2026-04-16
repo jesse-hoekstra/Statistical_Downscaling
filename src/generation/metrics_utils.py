@@ -643,6 +643,7 @@ def plot_marginal_densities(
     out_name: str = "marginal_densities",
     positions: list = None,
     labels: list = None,
+    figsize: tuple = None,
 ) -> list:
     """Marginal density plots at selected spatial positions vs. ground truth.
 
@@ -687,10 +688,7 @@ def plot_marginal_densities(
     n_x, d = first.shape[1], first.shape[2]
 
     if positions is None:
-        positions = (
-            [18, 36, 54] if data_model == "ks" else [0, 50, 100, 150, 200, 250, n_x - 1]
-        )
-    positions = [min(p, n_x - 1) for p in positions]
+        positions = [18, 36, 54] if data_model == "ks" else [60, 140, 220]
 
     if data_model == "ar":
         phi = float(run_sett["data_AR"]["phi"])
@@ -724,19 +722,14 @@ def plot_marginal_densities(
     os.makedirs(out_dir, exist_ok=True)
     out_paths = []
 
-    for dim in range(d):
-        n_pos = len(positions)
-        n_cols = min(n_pos, 4)
-        n_rows = (n_pos + n_cols - 1) // n_cols
-        _, axes_grid = plt.subplots(
-            n_rows, n_cols, figsize=(4 * n_cols, 4 * n_rows), sharey=False
+    for p in positions:
+        _, axes = plt.subplots(
+            1, d, figsize=figsize if figsize is not None else (4 * d, 4), sharey=False
         )
-        axes_flat = np.array(axes_grid).flatten()
-        for ax in axes_flat[n_pos:]:
-            ax.set_visible(False)
-        axes = axes_flat[:n_pos]
+        if d == 1:
+            axes = [axes]
 
-        for ax, p in zip(axes, positions):
+        for dim, ax in enumerate(axes):
             for (_, samples), color, label in zip(flat.items(), colors, labels):
                 ax.hist(
                     samples[:, p, dim],
@@ -785,13 +778,13 @@ def plot_marginal_densities(
             ax.grid(True, linestyle="--", alpha=0.4)
         plt.tight_layout()
 
-        out_path = os.path.join(out_dir, f"{out_name}_d{dim + 1}{key_suffix}.png")
+        out_path = os.path.join(out_dir, f"{out_name}_n{p}{key_suffix}.png")
         plt.savefig(out_path, dpi=150, bbox_inches="tight")
         plt.close()
         print(f"Marginal density plot saved to: {out_path}")
         out_paths.append(out_path)
 
         if writer is not None and hasattr(writer, "write_images"):
-            writer.write_images(images={f"{out_name}_d{dim + 1}{key_suffix}": out_path})
+            writer.write_images(images={f"{out_name}_n{p}{key_suffix}": out_path})
 
     return out_paths

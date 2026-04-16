@@ -717,6 +717,7 @@ def plot_adjacent_corrs(
     x_series: bool = False,
     compare_all_x: bool = False,
     labels: list = None,
+    figsize: tuple = (8, 5),
 ) -> str:
     """Plot adjacent-step correlations for flow vs true trajectories.
 
@@ -751,12 +752,12 @@ def plot_adjacent_corrs(
         str(_g.get("data_model") or _g.get("true_data_model", "ar")).strip().lower()
     )
     plot_idx = (
-        np.concatenate([[1], np.arange(30, max_k, 30)])
+        np.concatenate([[1], np.arange(10, max_k, 10)])
         if data_model == "ar"
         else np.concatenate([[1], np.arange(10, max_k, 20)])
     )
 
-    plt.figure(figsize=(8, 5))
+    plt.figure(figsize=figsize)
     if x_series:
         plt.plot(
             xs[plot_idx],

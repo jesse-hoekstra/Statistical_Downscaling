@@ -361,7 +361,6 @@ def main():
             key_suffix=key_suffix,
         )
     elif mode == "eval_all":
-        # Evaluate all generation types together in double precision
         jax.config.update("jax_enable_x64", True)
         evaluate_all_samples(
             work_dir=work_dir,
