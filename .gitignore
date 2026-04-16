@@ -21,5 +21,6 @@ main_OT/
 Other/
 .Rhistory
 aggregate_metrics.py
+plot_corrs_and_densities.py
 logs/
 data_KS/
