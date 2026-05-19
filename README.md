@@ -3,7 +3,7 @@
 
 
 
-### A JAX-based implementation of time series statistical downscaling, combining bi-causal **optimal transport** (OT) [Cao et al. 2026]  and **diffusion-based generation** (GEN) into a two-stage pipeline. Applied to autoregressive (AR) processes. Supporting codebase to the paper: https://arxiv.org/abs/2605.17271
+#### A JAX-based implementation of time series statistical downscaling, combining bi-causal **optimal transport** (OT) [Cao et al. 2026]  and **diffusion-based generation** (GEN) into a two-stage pipeline. Applied to autoregressive (AR) processes. Supporting codebase to the paper: https://arxiv.org/abs/2605.17271
 ---
 
 ## Overview
