@@ -10,7 +10,7 @@
 
 The pipeline consists of two complementary components:
 
-1. **Optimal Transport** (`src/optimal_transport/`) — Performs the bi-causal Optimal Transport (OT) methodology as per \cite{paper}, as an computationally efficient stochastic-optimization approach for computing bi-causal OT couplings with general, including continuous, marginals.
+1. **Optimal Transport** (`src/optimal_transport/`) — Performs the bi-causal Optimal Transport (OT) methodology as per [Cao et al. 2026], as an computationally efficient stochastic-optimization approach for computing bi-causal OT couplings with general, including continuous, marginals.
 2. **Generation** (`src/generation/`) — Trains a VP denoiser (UNet) on high-resolution data, with optional guidance at sampling time: unconditional, constraint-aware (using OT output for debiased conditioning).
 
 ---
