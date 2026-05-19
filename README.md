@@ -1,9 +1,9 @@
 # Time Series Statistical Downscaling: [Bi-Causal Optimal Transport](https://arxiv.org/abs/2605.17271) and Diffusion Models
-## Using Scalable Bi-causal Optimal Transport via KL Relaxation and Policy Gradients (https://arxiv.org/abs/2605.17271)
+## Using Scalable Bi-causal Optimal Transport via KL Relaxation and Policy Gradients
 
 
 
-A JAX-based implementation of time series statistical downscaling, combining bi-causal **optimal transport** (OT) and **diffusion-based generation** (GEN) into a two-stage pipeline. Applied to autoregressive (AR) processes. Supporting codebase to the paper: \cite{paper}, including all other synthetic experiments. 
+A JAX-based implementation of time series statistical downscaling, combining bi-causal **optimal transport** (OT) (https://arxiv.org/abs/2605.17271) and **diffusion-based generation** (GEN) into a two-stage pipeline. Applied to autoregressive (AR) processes. Supporting codebase to the paper: \cite{paper}, including all other synthetic experiments. 
 
 ---
 
