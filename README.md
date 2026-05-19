@@ -1,5 +1,5 @@
 # Time Series Statistical Downscaling: [Bi-Causal Optimal Transport](https://arxiv.org/abs/2605.17271) and Diffusion Models
-## Using Scalable Bi-causal Optimal Transport via KL Relaxation and Policy Gradients (according to [Cao et al 2026])
+## Using Scalable Bi-causal Optimal Transport via KL Relaxation and Policy Gradients [Cao et al 2026]
 
 
 
